@@ -5,6 +5,19 @@ A fast, stealth, **native-Rust web scraper** — a lighter alternative to Firecr
 a browser-faithful TLS/JA4 fingerprint to reach pages that block ordinary clients.
 No Node, no headless-Chrome fleet, no per-request browser boot.
 
+
+
+The fastest way to install Draco on Linux or macOS is via the install script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xchasercat/draco/main/install.sh | sh
+```
+
+*(This will automatically detect your OS/architecture, download the latest binary, and add it to your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`)*
+
+
+Then try scraping a page:
+
 ```sh
 draco scrape https://example.com          # → clean Markdown on stdout
 ```
