@@ -10,7 +10,7 @@ No Node, no headless-Chrome fleet, no per-request browser boot.
 The fastest way to install Draco on Linux or macOS is via the install script:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xchasercat/draco/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/cawa0505/draco/main/install.sh | sh
 ```
 
 *(This will automatically detect your OS/architecture, download the latest binary, and add it to your `~/.zshrc`, `~/.bashrc`, or `~/.config/fish/config.fish`)*
@@ -45,7 +45,7 @@ headless browser fleet.
 
 Prebuilt release (binary to `~/.draco/bin`):
 ```sh
-curl -fsSL https://raw.githubusercontent.com/0xchasercat/draco/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/cawa0505/draco/main/install.sh | sh
 ```
 
 Build from this repo and install to `~/.draco/bin` (updates the running
@@ -56,7 +56,7 @@ Build from this repo and install to `~/.draco/bin` (updates the running
 
 Manual build:
 ```sh
-git clone https://github.com/0xchasercat/draco && cd draco
+git clone https://github.com/cawa0505/draco && cd draco
 cargo build --release
 ```
 

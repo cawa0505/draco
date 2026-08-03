@@ -43,7 +43,7 @@ else
     esac
 
     TAR_NAME="draco-${OS_NAME}-${ARCH_NAME}.tar.gz"
-    URL="https://github.com/0xchasercat/draco/releases/latest/download/$TAR_NAME"
+    URL="https://github.com/cawa0505/draco/releases/latest/download/$TAR_NAME"
 
     echo "Downloading $TAR_NAME..."
     TMP_DIR=$(mktemp -d)

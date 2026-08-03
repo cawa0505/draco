@@ -44,7 +44,7 @@ compiler, `clang`/`libclang`, `perl`, `pkg-config`.
 ## 2. Build
 
 ```sh
-git clone https://github.com/0xchasercat/draco && cd draco
+git clone https://github.com/cawa0505/draco && cd draco
 cargo build --release
 ```
 
