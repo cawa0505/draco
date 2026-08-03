@@ -143,6 +143,9 @@ pub fn scrape_interact_html(
         links: formats
             .links
             .then(|| draco_static::content::extract_links(html, url)),
+        // ponytail: interact does not thread selectors — live-DOM selector
+        // extraction is a spec [待討論] item; add a `selectors` param when wired.
+        selector: None,
         endpoints: None,
         timing: Timing::default(),
         trace,

@@ -330,6 +330,11 @@ struct ScrapeRequest {
     include_tags: Option<Vec<String>>,
     #[serde(default)]
     exclude_tags: Option<Vec<String>>,
+    /// CSS selectors for Draco's `select` format (ax-scraper-style extraction):
+    /// each selector's matches land in `data.selector` as collapsed text + raw
+    /// outer HTML. Draco extension.
+    #[serde(default)]
+    selectors: Option<Vec<String>>,
     /// Extra request headers forwarded to the fetch (Firecrawl `headers`).
     #[serde(default)]
     headers: Option<std::collections::HashMap<String, String>>,
@@ -365,6 +370,21 @@ async fn scrape(
             Json(error_body("\"url\" must be a non-empty string")),
         );
     }
+    // The `select` format is a hard contract: reject invalid selectors up
+    // front (400), the same way an unknown `--format` token is rejected.
+    if let Some(selectors) = req.selectors.as_deref() {
+        if let Err(e) = draco_core::validate_selectors(selectors) {
+            return (StatusCode::BAD_REQUEST, Json(error_body(&e)));
+        }
+    }
+    if formats.select && req.selectors.as_deref().map_or(true, |s| s.is_empty()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_body(
+                "format \"select\" requires a non-empty \"selectors\" list",
+            )),
+        );
+    }
 
     let config = Config {
         formats,
@@ -374,6 +394,7 @@ async fn scrape(
             .unwrap_or(state.defaults.only_main_content),
         include_tags: req.include_tags.clone().unwrap_or_default(),
         exclude_tags: req.exclude_tags.clone().unwrap_or_default(),
+        selectors: req.selectors.clone().unwrap_or_default(),
         headers: merge_cookie_header(
             req.headers.clone().unwrap_or_default(),
             req.cookies.clone().unwrap_or_default(),
@@ -458,7 +479,7 @@ impl FormatReject {
 
 /// Parse Firecrawl `formats` into a Draco [`FormatSet`]. Empty defaults to
 /// `markdown` (Firecrawl's default). Supported: `markdown`, `html`, `rawHtml`,
-/// `links`, `json`, `endpoints`. Browser-only formats (`screenshot`,
+/// `links`, `select`, `json`, `endpoints`. Browser-only formats (`screenshot`,
 /// `screenshot@fullPage`, `actions`) and not-yet-implemented ones (`extract`,
 /// `changeTracking`, `summary`, `branding`, `product`, `menu`) are rejected as
 /// *unsupported* (422 — understood, but a DOM-only engine can't satisfy them);
@@ -472,6 +493,10 @@ pub(crate) fn parse_formats(formats: &[String]) -> Result<FormatSet, FormatRejec
             "html" => set.html = true,
             "rawHtml" => set.raw_html = true,
             "links" => set.links = true,
+            // ax-scraper-style CSS-selector extraction; each requested
+            // selector's matches ride `data.selector` (the request's `selectors`
+            // field, validated before any work runs).
+            "select" => set.select = true,
             "json" => set.json = true,
             // Discovery: the ranked catalog of API endpoints the page calls.
             // Composes with the content formats and rides `data.endpoints`.
@@ -490,7 +515,7 @@ pub(crate) fn parse_formats(formats: &[String]) -> Result<FormatSet, FormatRejec
             other => {
                 return Err(FormatReject::unknown(format!(
                     "unknown format {other:?} — supported formats: \"markdown\", \
-                     \"html\", \"rawHtml\", \"links\", \"json\", \"endpoints\""
+                     \"html\", \"rawHtml\", \"links\", \"select\", \"json\", \"endpoints\""
                 )));
             }
         }
@@ -597,6 +622,12 @@ pub(crate) fn to_firecrawl(result: &ExtractionResult) -> (StatusCode, Value) {
             data.insert(
                 "links".into(),
                 serde_json::to_value(links).unwrap_or(Value::Null),
+            );
+        }
+        if let Some(selector) = &result.selector {
+            data.insert(
+                "selector".into(),
+                serde_json::to_value(selector).unwrap_or(Value::Null),
             );
         }
         if let Some(d) = &result.data {
@@ -790,6 +821,25 @@ mod tests {
     }
 
     #[test]
+    fn select_format_parses() {
+        assert_eq!(
+            parse_formats(&["select".into()]).unwrap(),
+            FormatSet {
+                select: true,
+                ..FormatSet::none()
+            }
+        );
+        assert_eq!(
+            parse_formats(&["markdown".into(), "select".into()]).unwrap(),
+            FormatSet {
+                markdown: true,
+                select: true,
+                ..FormatSet::none()
+            }
+        );
+    }
+
+    #[test]
     fn known_but_unsupported_formats_fail_loudly() {
         let err = parse_formats(&["screenshot".into()]).unwrap_err();
         assert!(err.unsupported, "{}", err.message);
@@ -881,6 +931,7 @@ mod tests {
             html: None,
             raw_html: None,
             links: None,
+            selector: None,
             endpoints: None,
             timing: Timing::default(),
             trace: vec![],

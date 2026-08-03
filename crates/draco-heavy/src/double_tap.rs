@@ -25,6 +25,7 @@ pub fn extract_rendered_html(url: &str, html: &str) -> ExtractionResult {
         // Browser DOM is rendered output, not the unmodified network response.
         raw_html: None,
         links: None,
+        selector: None,
         endpoints: None,
         timing: Timing {
             network_ms: 0,

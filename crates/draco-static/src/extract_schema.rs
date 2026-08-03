@@ -94,6 +94,51 @@ pub fn extract_with_schema(html: &str, page_url: &str, schema: &Value) -> (Value
     (Value::Object(out), warnings)
 }
 
+/// Draco's ax-scraper-style CSS-selector extraction (the `select` format): for
+/// each selector in `selectors`, every element it matches on `html` as
+/// collapsed text + raw outer HTML, in document order. One entry per selector
+/// even when nothing matched (empty `matches`); per-selector matches are capped
+/// at [`MAX_MATCHES`].
+///
+/// The caller is expected to have run [`validate_selectors`] at request-build
+/// time (so the request is rejected with a clear error before any work runs);
+/// a defensive parse failure here degrades to an empty entry rather than
+/// aborting the scrape.
+pub fn select_matches(html: &str, selectors: &[String]) -> Vec<draco_types::SelectorMatch> {
+    let doc = Html::parse_document(html);
+    selectors
+        .iter()
+        .map(|sel| {
+            let matches = match Selector::parse(sel) {
+                Ok(selector) => doc
+                    .select(&selector)
+                    .take(MAX_MATCHES)
+                    .map(|el| draco_types::SelectorValue {
+                        text: collapse_ws(&el.text().collect::<String>()),
+                        html: el.html(),
+                    })
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            draco_types::SelectorMatch {
+                selector: sel.clone(),
+                matches,
+            }
+        })
+        .collect()
+}
+
+/// Reject a request whose selectors don't parse, *before* any work runs — the
+/// `select` format is a hard contract, unlike schema extraction's warn-and-null.
+/// Returns the first invalid selector, if any. Surfaces (CLI/daemon/MCP) gate
+/// on this the same way they gate on an unknown `--format`.
+pub fn validate_selectors(selectors: &[String]) -> Result<(), String> {
+    match selectors.iter().find(|s| Selector::parse(s).is_err()) {
+        Some(bad) => Err(format!("invalid CSS selector: {bad:?}")),
+        None => Ok(()),
+    }
+}
+
 /// A selection scope: the whole document (root schema) or one matched element
 /// (nested `fields`). One lifetime — the parsed tree's — so both arms yield
 /// `ElementRef<'t>` and the field evaluator can recurse without duplication.
@@ -424,5 +469,44 @@ mod tests {
         }
         let (_, w) = extract_with_schema(deep_html, URL, &json!({ "deep": spec }));
         assert!(w.iter().any(|m| m.contains("depth cap")));
+    }
+
+    // ---- select format ----
+
+    #[test]
+    fn select_matches_collapse_text_and_outer_html_in_order() {
+        let out = select_matches(PAGE, &[".price".to_string(), "h1".to_string()]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].selector, ".price");
+        let prices: Vec<_> = out[0].matches.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(prices, ["$9.99", "$19.99", "$4.49"]);
+        // Outer HTML keeps the element itself (raw, unmodified).
+        assert_eq!(
+            out[0].matches[0].html,
+            r#"<span class="price">$9.99</span>"#
+        );
+        assert_eq!(out[1].matches[0].text, "Deals of the day");
+    }
+
+    #[test]
+    fn select_no_match_yields_empty_entry_not_error() {
+        let out = select_matches(PAGE, &[".does-not-exist".to_string()]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].matches.is_empty());
+    }
+
+    #[test]
+    fn select_matches_are_capped_at_max_matches() {
+        let many = format!("<ul>{}</ul>", "<li>x</li>".repeat(MAX_MATCHES + 5));
+        let out = select_matches(&many, &["li".to_string()]);
+        assert_eq!(out[0].matches.len(), MAX_MATCHES);
+    }
+
+    #[test]
+    fn validate_selectors_rejects_invalid_and_accepts_valid() {
+        assert!(validate_selectors(&[]).is_ok());
+        assert!(validate_selectors(&["a.item".to_string()]).is_ok());
+        let err = validate_selectors(&["a.item".to_string(), ":::nope".to_string()]);
+        assert_eq!(err, Err("invalid CSS selector: \":::nope\"".to_string()));
     }
 }

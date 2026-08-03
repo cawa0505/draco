@@ -53,6 +53,7 @@ mod tests {
             html: None,
             raw_html: None,
             links: None,
+            selector: None,
             endpoints: None,
             timing: Timing::default(),
             trace: Vec::new(),

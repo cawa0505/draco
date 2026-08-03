@@ -279,10 +279,12 @@ fn scrape_tool_descriptor() -> Value {
                 },
                 "formats": {
                     "type": "array",
-                    "items": { "type": "string", "enum": ["markdown", "html", "rawHtml", "links", "json", "endpoints"] },
+                    "items": { "type": "string", "enum": ["markdown", "html", "rawHtml", "links", "select", "json", "endpoints"] },
                     "description": "Output formats; defaults to [\"markdown\"]. \"html\" is \
                                     cleaned main-content HTML, \"rawHtml\" the unmodified fetch, \
-                                    \"links\" every absolutized link, \"json\" the tiered JSON-API \
+                                    \"links\" every absolutized link, \"select\" the CSS-selector \
+                                    extraction (each \"selectors\" entry's matches as collapsed \
+                                    text + raw outer HTML), \"json\" the tiered JSON-API \
                                     extraction, \"endpoints\" the ranked API-endpoint catalog."
                 },
                 "onlyMainContent": {
@@ -302,6 +304,13 @@ fn scrape_tool_descriptor() -> Value {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "CSS selectors to drop before extraction."
+                },
+                "selectors": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "CSS selectors for the \"select\" format (ax-scraper-style \
+                                    extraction): each entry's matches land in the result's \
+                                    \"selector\" field as collapsed text + raw outer HTML."
                 },
                 "extract": {
                     "type": "object",
@@ -687,6 +696,35 @@ async fn call_tool(
 
     let mut config = defaults.clone();
     config.formats = parsed_formats;
+    // The `select` format is a hard contract: reject invalid selectors (and
+    // `select` with no selectors) before any work runs.
+    if let Some(sel) = args.get("selectors") {
+        let list: Vec<String> = sel
+            .as_array()
+            .ok_or((
+                -32602,
+                "\"selectors\" must be an array of CSS selector strings".to_string(),
+            ))?
+            .iter()
+            .filter_map(Value::as_str)
+            .map(String::from)
+            .collect();
+        if let Err(e) = draco_core::validate_selectors(&list) {
+            return Err((-32602, e));
+        }
+        if config.formats.select && list.is_empty() {
+            return Err((
+                -32602,
+                "format \"select\" requires a non-empty \"selectors\" list".to_string(),
+            ));
+        }
+        config.selectors = list;
+    } else if config.formats.select {
+        return Err((
+            -32602,
+            "format \"select\" requires a \"selectors\" list".to_string(),
+        ));
+    }
     // `draco_discover` always discovers and replays the winner into `data`,
     // regardless of the `formats` argument: force endpoints + json-only.
     if is_discover {
@@ -779,6 +817,15 @@ async fn call_tool(
             payload["extractWarnings"] = w.clone();
         }
         let pretty = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+        content.push(json!({ "type": "text", "text": pretty }));
+    }
+    // CSS-selector extraction leads when requested: the matches are the answer
+    // the agent asked for; prose follows.
+    if config.formats.select {
+        let pretty = serde_json::to_string_pretty(
+            &data.get("selector").cloned().unwrap_or_else(|| json!([])),
+        )
+        .unwrap_or_else(|_| "[]".to_string());
         content.push(json!({ "type": "text", "text": pretty }));
     }
     if is_discover {

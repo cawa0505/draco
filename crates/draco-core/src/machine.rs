@@ -197,6 +197,9 @@ struct Run {
     raw_html: Option<String>,
     /// Absolutized `<a href>` list (`links` format); staged when requested.
     links: Option<Vec<String>>,
+    /// CSS-selector extraction (`select` format): one entry per requested
+    /// selector; mirrors `links` staging (static body → hydrated refresh).
+    selector: Option<Vec<draco_types::SelectorMatch>>,
     /// Selector-schema extraction, staged independently of requested formats.
     extract: Option<serde_json::Value>,
     /// The tier the staged Markdown came from: [`SourceTier::Static`] for a
@@ -233,6 +236,7 @@ impl Run {
             html: None,
             raw_html: None,
             links: None,
+            selector: None,
             extract: None,
             md_tier: SourceTier::Static,
             endpoints: None,
@@ -284,6 +288,7 @@ impl Run {
             html: self.html,
             raw_html: self.raw_html,
             links: self.links,
+            selector: self.selector,
             endpoints: self.endpoints,
             timing: self.timing,
             trace: self.trace,
@@ -590,6 +595,12 @@ where
         }
         if config.formats.links {
             run.links = Some(draco_static::content::extract_links(&body, url));
+        }
+        if config.formats.select {
+            run.selector = Some(draco_static::extract_schema::select_matches(
+                filtered.as_ref(),
+                &config.selectors,
+            ));
         }
 
         // Render-then-Markdown escalation: a thin or skeleton client-rendered
@@ -1275,6 +1286,12 @@ where
         if config.formats.links {
             run.links = Some(draco_static::content::extract_links(&merged, url));
         }
+        if config.formats.select {
+            run.selector = Some(draco_static::extract_schema::select_matches(
+                merged_filtered.as_ref(),
+                &config.selectors,
+            ));
+        }
         let why = if resolved_skeleton {
             "resolved skeleton"
         } else {
@@ -1493,6 +1510,7 @@ impl Run {
             html: self.html.take(),
             raw_html: self.raw_html.take(),
             links: self.links.take(),
+            selector: self.selector.take(),
             extract: self.extract.take(),
             md_tier: self.md_tier,
             endpoints: self.endpoints.take(),

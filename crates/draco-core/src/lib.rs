@@ -134,6 +134,8 @@ pub use ranking::{
 /// - `html` — cleaned, absolutized main-content HTML.
 /// - `raw_html` — the unmodified fetched HTML.
 /// - `links` — every absolutized `<a href>` on the page.
+/// - `select` — CSS-selector extraction: each `Config::selectors` entry's
+///   matches as collapsed text + raw outer HTML (the `selector` result field).
 /// - `json` — the tiered JSON-API extraction (Tier 0 → 1 → 2), populating `data`.
 /// - `endpoints` — the ranked catalog of API endpoints the page's JS called
 ///   (the `endpoints` format / `/v1/discover`); forces the Tier 2 capture.
@@ -143,6 +145,7 @@ pub struct FormatSet {
     pub html: bool,
     pub raw_html: bool,
     pub links: bool,
+    pub select: bool,
     pub json: bool,
     pub endpoints: bool,
 }
@@ -155,6 +158,7 @@ impl Default for FormatSet {
             html: false,
             raw_html: false,
             links: false,
+            select: false,
             json: false,
             endpoints: false,
         }
@@ -169,6 +173,7 @@ impl FormatSet {
             html: false,
             raw_html: false,
             links: false,
+            select: false,
             json: false,
             endpoints: false,
         }
@@ -188,9 +193,10 @@ impl FormatSet {
     }
 
     /// Any output derived from the fetched/rendered HTML (markdown / html /
-    /// links) is requested — i.e. the static scrape + DOM pre-processing must run.
+    /// links / select) is requested — i.e. the static scrape + DOM pre-processing
+    /// must run.
     pub fn wants_static_content(&self) -> bool {
-        self.markdown || self.html || self.links
+        self.markdown || self.html || self.links || self.select
     }
 
     /// The tiered JSON-API extraction (populating `data`) is requested.
@@ -225,6 +231,10 @@ pub struct Config {
     pub include_tags: Vec<String>,
     /// CSS selectors to drop before extraction — Firecrawl's `excludeTags`.
     pub exclude_tags: Vec<String>,
+    /// CSS selectors for the `select` format (Draco's ax-scraper-style selector
+    /// extraction). Each entry's matches land in `ExtractionResult::selector`
+    /// as collapsed text + raw outer HTML. Empty disables the format.
+    pub selectors: Vec<String>,
     /// Extra request headers forwarded to every outbound fetch — Firecrawl's
     /// `headers` (custom UA, cookies, auth). Ordered; empty by default.
     pub headers: Vec<(String, String)>,
@@ -274,6 +284,7 @@ impl Default for Config {
             only_main_content: true,
             include_tags: Vec::new(),
             exclude_tags: Vec::new(),
+            selectors: Vec::new(),
             headers: Vec::new(),
             proxy: None,
             delay_ms: 0,
@@ -309,6 +320,15 @@ pub async fn extract(url: &str, config: &Config) -> ExtractionResult {
 /// is no cross-scrape state bleed (see [`Tier2Pool`]).
 pub async fn extract_with_pool(url: &str, config: &Config, pool: &Tier2Pool) -> ExtractionResult {
     machine::run_with_pool(url, config, pool).await
+}
+
+/// Reject a request whose `select`-format selectors don't parse, *before* any
+/// work runs — the `select` format is a hard contract, unlike schema
+/// extraction's warn-and-null. Returns the first invalid selector, if any.
+/// Surfaces (CLI/daemon/MCP) gate on this the same way they gate on an unknown
+/// `--format`.
+pub fn validate_selectors(selectors: &[String]) -> Result<(), String> {
+    draco_static::extract_schema::validate_selectors(selectors)
 }
 
 #[cfg(test)]

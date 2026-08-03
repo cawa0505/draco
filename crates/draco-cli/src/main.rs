@@ -66,6 +66,9 @@ enum FormatArg {
     RawHtml,
     /// Every absolutized `<a href>` on the page.
     Links,
+    /// CSS-selector extraction (ax-scraper-style): each `--selector`'s matches
+    /// as collapsed text + raw outer HTML, in the `selector` result field.
+    Select,
     /// Tiered JSON-API extraction, populating `data`.
     Json,
     /// Discover the JSON/XHR API endpoints the page's JavaScript calls, ranked,
@@ -108,6 +111,7 @@ fn formats_from_args(args: &[FormatArg]) -> FormatSet {
             FormatArg::Html => set.html = true,
             FormatArg::RawHtml => set.raw_html = true,
             FormatArg::Links => set.links = true,
+            FormatArg::Select => set.select = true,
             FormatArg::Json => set.json = true,
             FormatArg::Endpoints => set.endpoints = true,
             FormatArg::Both => {
@@ -224,6 +228,11 @@ enum Command {
         /// repeatable.
         #[arg(long = "exclude-tag")]
         exclude_tag: Vec<String>,
+        /// CSS selector for the `select` format (ax-scraper-style extraction);
+        /// repeatable. Each selector's matches land in the `selector` result
+        /// field as collapsed text + raw outer HTML. Implies `--format select`.
+        #[arg(long = "selector")]
+        select_tag: Vec<String>,
         /// Extra request header as `Name: Value` (Firecrawl's `headers`);
         /// repeatable.
         #[arg(long = "header", value_parser = parse_header)]
@@ -674,10 +683,30 @@ async fn async_main() {
             no_main_content,
             include_tag,
             exclude_tag,
+            select_tag,
             header,
             pretty,
         } => {
             let formats = formats_from_args(&format);
+            // `--selector` implies the `select` format; `--format select` with
+            // no selector is a contract error (unlike schema extraction's
+            // warn-and-null). Selectors are rejected at parse time, before any
+            // network work runs.
+            let formats = {
+                let mut f = formats;
+                if !select_tag.is_empty() {
+                    f.select = true;
+                }
+                if f.select && select_tag.is_empty() {
+                    eprintln!("draco: --format select requires --selector <CSS>");
+                    std::process::exit(2);
+                }
+                if let Err(e) = draco_core::validate_selectors(&select_tag) {
+                    eprintln!("draco: {e}");
+                    std::process::exit(2);
+                }
+                f
+            };
             let extract_schema = match extract_schema.as_deref() {
                 None => None,
                 Some(raw) => match serde_json::from_str::<serde_json::Value>(raw) {
@@ -699,6 +728,7 @@ async fn async_main() {
                 only_main_content: !no_main_content,
                 include_tags: include_tag,
                 exclude_tags: exclude_tag,
+                selectors: select_tag,
                 headers: header,
                 proxy,
                 delay_ms: delay,
@@ -753,6 +783,7 @@ async fn async_main() {
                 only_main_content: true,
                 include_tags: Vec::new(),
                 exclude_tags: Vec::new(),
+                selectors: Vec::new(),
                 headers: Vec::new(),
                 proxy,
                 delay_ms: 0,
@@ -1099,6 +1130,7 @@ async fn async_main() {
                 only_main_content: true,
                 include_tags: Vec::new(),
                 exclude_tags: Vec::new(),
+                selectors: Vec::new(),
                 headers: Vec::new(),
                 proxy,
                 delay_ms: 0,
@@ -1151,6 +1183,7 @@ async fn async_main() {
                 only_main_content: true,
                 include_tags: Vec::new(),
                 exclude_tags: Vec::new(),
+                selectors: Vec::new(),
                 headers: Vec::new(),
                 proxy,
                 delay_ms: 0,
@@ -1263,6 +1296,7 @@ mod tests {
             html: None,
             raw_html: None,
             links: None,
+            selector: None,
             endpoints: None,
             timing: Timing::default(),
             trace: Vec::new(),
@@ -1346,6 +1380,7 @@ mod tests {
             html: None,
             raw_html: None,
             links: None,
+            selector: None,
             endpoints: None,
             timing: Timing::default(),
             trace: Vec::new(),

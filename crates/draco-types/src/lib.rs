@@ -117,6 +117,11 @@ pub struct ExtractionResult {
     /// `None` unless requested.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub links: Option<Vec<String>>,
+    /// CSS-selector extraction — the `select` format. One entry per requested
+    /// selector, each carrying every match's collapsed text + raw outer HTML.
+    /// `None` unless a `--selector` was requested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<Vec<SelectorMatch>>,
     /// The ranked catalog of JSON/XHR API endpoints the page's own JavaScript
     /// called, discovered during the Tier 2 capture (the `endpoints` format /
     /// `/v1/discover`). `Some` only when discovery was requested and the isolate
@@ -127,6 +132,26 @@ pub struct ExtractionResult {
     pub trace: Vec<TraceStep>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<DracoError>,
+}
+
+/// One CSS-selector extraction entry (the `select` format): the requested
+/// selector and every element it matched, as collapsed text + raw outer HTML.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SelectorMatch {
+    /// The CSS selector this entry was evaluated with.
+    pub selector: String,
+    /// Matched elements in document order; `text` is whitespace-collapsed text
+    /// content, `html` the element's raw outer HTML. Empty when nothing matched.
+    pub matches: Vec<SelectorValue>,
+}
+
+/// One matched element.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SelectorValue {
+    /// Whitespace-collapsed text content of the element.
+    pub text: String,
+    /// Raw outer HTML of the element (unmodified — no cleaning/absolutization).
+    pub html: String,
 }
 
 /// One API endpoint discovered by the Tier 2 isolate — a `fetch`/XHR the page's
@@ -407,6 +432,13 @@ mod tests {
             html: None,
             raw_html: None,
             links: None,
+            selector: Some(vec![SelectorMatch {
+                selector: ".price".into(),
+                matches: vec![SelectorValue {
+                    text: "$9.99".into(),
+                    html: r#"<span class="price">$9.99</span>"#.into(),
+                }],
+            }]),
             endpoints: None,
             timing: Timing {
                 network_ms: 210,
@@ -504,6 +536,7 @@ mod tests {
             html: None,
             raw_html: None,
             links: None,
+            selector: None,
             endpoints: None,
             timing: Timing::default(),
             trace: vec![],
@@ -523,6 +556,10 @@ mod tests {
         assert!(
             !s.contains("metadata"),
             "None metadata should be omitted: {s}"
+        );
+        assert!(
+            !s.contains("\"selector\""),
+            "None selector should be omitted: {s}"
         );
     }
 }
