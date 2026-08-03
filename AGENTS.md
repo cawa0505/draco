@@ -4,6 +4,13 @@ Fork of [0xchasercat/draco](https://github.com/0xchasercat/draco) at
 [cawa0505/draco](https://github.com/cawa0505/draco). Read `docs/ROADMAP.md` and
 `docs/select-format-spec.md` before touching pipeline code.
 
+## Fork main goal (2026-08)
+
+Strengthen the MCP layer for AI-agent use — see `spec/mcp-agent-ergonomics/spec.md`
+(R1 observation-first action-by-ref, R2 explicit sessions, R3 bounded calls,
+R4 quality signals, R5 self-describing failures, R6 batch, R7 descriptions-as-spec).
+Interact work rides roadmap Phase 1.
+
 ## Versioning (fork rule)
 
 - Fork release version = **upstream latest minor + 1**. Upstream is at v0.20.x →
