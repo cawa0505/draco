@@ -29,6 +29,9 @@ Deliberate divergences from upstream (keep when merging):
   screenshots a non-goal; our fork intentionally diverges
 - Deploy: systemd user service example, `install.sh --from-source`, canonical
   owner URLs (`cawa0505`)
+- Upstream process artifacts (`docs/superpowers/**` superpowers-generated plans):
+  divert — Claude Code process noise, not code we adopt
+- Specs follow the OpenSpec convention (`spec/` dir, see spec/README.md)
 
 ## Gates before ship
 
