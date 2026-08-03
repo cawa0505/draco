@@ -4,6 +4,19 @@
 分階段、每階段有驗證 gate。原則：DOM-only 的留在 in-process V8 + happy-dom（零新依賴）；
 需要真實 layout/paint 的另開 opt-in 引擎，不偷渡進無瀏覽器路線。
 
+## 價值定位（2026-08-03 決策）
+
+playwright 真正的價值是**自動化互動迴圈**（observe → act → observe），不是 screenshot。
+而這個迴圈幾乎全部 DOM-only 就做得動：a11y snapshot（accessibility tree 是 DOM+ARIA 算的，
+與像素無關）、role/name 定位、語意 wait、多 tab/dialog/console/network 都是 happy-dom 層的事。
+**只有 screenshot / 真實 layout 需要瀏覽器** — 所以 Phase 1–3 是旗艦（agentic 互動核心），
+Phase 4 的 browser 引擎只是補最薄的一層。
+
+唯一誠實的 DOM 邊界（3 個互動語意）：真實 DnD（DataTransfer 事件鏈）、file upload 到 OS 層、
+overlay 遮擋判斷（需真實座標）。解法沿用 escalation ladder 哲學：DOM act 優先，卡住才升
+browser rung（rustwright-core 成熟後接），與 extraction tier 同模式。在那之前 playwright-mcp
+（:3015）補這 10% browser-only 互動。
+
 ## 規格來源：ax-mcp（`~/DockerSpace/ax-mcp`）
 
 現有部署 = supergateway 把兩個 stdio MCP 橋成 remote Streamable HTTP `/mcp`：
@@ -47,7 +60,7 @@ opencode `type: "remote"` / Claude remote 直接連 `http://host:3003/mcp`，不
 Gate：opencode remote MCP 連上 draco daemon，`draco_scrape` 遠端呼叫成功；
 curl SSE GET + POST 都通。之後 ax-mcp 容器可退役（scraper 部分）。
 
-## Phase 1 — a11y snapshot + ref 定位（DOM-only，agentic 關鍵）
+## Phase 1 — a11y snapshot + ref 定位（DOM-only，**旗艦：agentic 互動核心**）
 
 playwright-mcp 能 agentic 靠 a11y tree + ref 定位；Draco 只有 CSS selector，LLM 得猜。
 
