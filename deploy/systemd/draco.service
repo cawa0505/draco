@@ -1,0 +1,29 @@
+# Draco API daemon — systemd user service example
+#
+# Runs the Firecrawl-compatible REST daemon (`POST /v1/scrape`, `GET /health`,
+# plus /v1/map|search|discover and `POST /mcp`). MCP clients normally use
+# local/command mode instead (`draco mcp` over stdio) — this service is only
+# for the always-on REST API.
+#
+# Install:  cp draco.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+# Enable:   systemctl --user enable --now draco.service
+# Logs:     journalctl --user -u draco.service -f
+#
+# Assumes the standard install.sh layout: the binary lives at
+# ~/.draco/bin/draco (the `%h` specifier resolves the user's home).
+
+[Unit]
+Description=Draco browserless scraper API daemon (Firecrawl-compatible REST)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Bind localhost by default: the daemon has no auth, so don't expose it
+# directly to the LAN — front it with a reverse proxy if you must.
+ExecStart=%h/.draco/bin/draco serve --host 127.0.0.1 --port 3002
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
