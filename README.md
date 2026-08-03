@@ -43,6 +43,18 @@ headless browser fleet.
 
 ## Install / build
 
+Prebuilt release (binary to `~/.draco/bin`):
+```sh
+curl -fsSL https://raw.githubusercontent.com/0xchasercat/draco/main/install.sh | sh
+```
+
+Build from this repo and install to `~/.draco/bin` (updates the running
+`draco.service` systemd user unit automatically if present):
+```sh
+./install.sh --from-source
+```
+
+Manual build:
 ```sh
 git clone https://github.com/0xchasercat/draco && cd draco
 cargo build --release
