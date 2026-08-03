@@ -77,14 +77,14 @@ session 持 page map `{id → isolate document}`，切換換 active document。�
 努力：1–2 天。低優先，parity 補齊非痛點。
 Gate：雙 tab 獨立 JS 狀態、切換後 serialize 正確。
 
-## [待討論] Phase 4 — 瀏覽器引擎 opt-in（screenshot / 真實 layout）
+## Phase 4 — 瀏覽器引擎 opt-in（screenshot / 真實 layout）— [已決策：等 rustwright-core]
 
 happy-dom 無 layout/paint — screenshot 是跨不過的硬邊界。Rust 選項（2026-08 查證）：
 
 | 方案 | runtime 依賴 | 判決 |
 |---|---|---|
-| **chromiumoxide 0.9.1** | 純 Rust CDP，只需 chromium binary | **建議**。a11y 域齊全（`getFullAXTree`/`queryAXTree` 走 `Page::execute`，~30 行 wrapper）；fetcher 可取 ChromeHeadlessShell（~88MB zip）或重用既有 chrome；截圖 high-level API 現成 |
-| rustwright-core 0.1.x | 純 Rust，Skyvern 出品 | 觀望 — alpha（2026-07 才出），已內建 Playwright 級 a11y + 截圖；出 0.1 後 revisit |
+| rustwright-core 0.1.x | 純 Rust，Skyvern 出品 | **[已決策] 主路線** — alpha（2026-07 才出），內建 Playwright 級 a11y + 截圖，無 driver；等 ≥0.2.0 再實作 |
+| **chromiumoxide 0.9.1** | 純 Rust CDP，只需 chromium binary | fallback。a11y 域齊全（`getFullAXTree`/`queryAXTree` 走 `Page::execute`，~30 行 wrapper）；fetcher 可取 ChromeHeadlessShell（~88MB zip）或重用既有 chrome；截圖 high-level API 現成 |
 | playwright-rs 0.15.1 | **Node 18+ + driver + chromium** | 出局 — Node runtime 破壞單一 static binary 部署 |
 | wry / webkit2gtk | 系統 webview，零下載 | 出局 — per-OS、需 display，layout 隨系統瀏覽器，不可預期 |
 
