@@ -381,8 +381,10 @@ opencode; shell-style `$HOME` is not):
 The same server is bound on the daemon at `POST /mcp` (minimal Streamable-HTTP
 subset: single-message POST → single JSON response, `202` for notifications).
 Three tools, all annotated read-only:
-- `draco_scrape` (`url`, `formats: ["markdown"|"json"|"endpoints"]`, `tierMax`,
-  `captureWindowMs`, `timeout`, `ignoreRobots`) — scrape to Markdown/JSON.
+- `draco_scrape` (`url`, `formats: ["markdown"|"json"|"select"|"endpoints"]`,
+  `selectors: ["css, ..."]` for the `select` format, `tierMax`,
+  `captureWindowMs`, `timeout`, `ignoreRobots`) — scrape to Markdown/JSON, or
+  pull CSS-selector matches (raw text + HTML).
 - `draco_discover` (`url`, `tierMax`, `captureWindowMs`, `timeout`,
   `ignoreRobots`, `allowUnsafeReplay`) — the ranked API-endpoint catalog + the
   replayed winner, for agents that want a page's data API.
