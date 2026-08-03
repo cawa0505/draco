@@ -13,6 +13,10 @@ Fork of [0xchasercat/draco](https://github.com/0xchasercat/draco) at
 - Tag and release on `cawa0505/draco` only. Release CI runs on GitHub-hosted
   runners (fork-friendly) — do not restore the upstream self-hosted
   `namespace-profile-draco-*` runners; they do not exist on this fork.
+- Release cadence: cut releases on our own milestones (feature complete /
+  install demand), not synced to every upstream release — install.sh consumers
+  pull our `releases/latest`. Before cutting, `git ls-remote --tags upstream`
+  and set version = max(our next, upstream latest minor + 1).
 
 ## Upstream sync workflow
 
