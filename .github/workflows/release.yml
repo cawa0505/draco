@@ -21,17 +21,22 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runs-on: namespace-profile-draco-macos-arm64
+          - runs-on: macos-14
             asset: draco-macos-arm64.tar.gz
-          - runs-on: namespace-profile-draco-linux-x86-64
+            deps: brew install cmake pkg-config
+          - runs-on: ubuntu-latest
             asset: draco-linux-x86-64.tar.gz
-          - runs-on: namespace-profile-draco-linux-arm64
+            deps: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev perl pkg-config
+          - runs-on: ubuntu-24.04-arm
             asset: draco-linux-arm64.tar.gz
+            deps: sudo apt-get update && sudo apt-get install -y build-essential cmake clang libclang-dev perl pkg-config
     runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install build dependencies
+        run: ${{ matrix.deps }}
       - name: Build
         run: cargo build --locked --release --package draco-cli
       - name: Package
@@ -46,7 +51,7 @@ jobs:
   release:
     name: Publish release
     needs: build
-    runs-on: namespace-profile-draco-linux-x86-64
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:

@@ -359,8 +359,23 @@ clients (Claude Desktop/Code, editors, orchestrators):
 draco mcp                        # stdio transport (newline-delimited JSON-RPC)
 ```
 
+Claude Desktop / Code:
 ```json
 { "mcpServers": { "draco": { "command": "draco", "args": ["mcp"] } } }
+```
+
+opencode (`~/.config/opencode/opencode.json` — `{env:HOME}` is expanded by
+opencode; shell-style `$HOME` is not):
+```json
+{
+  "mcp": {
+    "draco": {
+      "type": "local",
+      "command": ["{env:HOME}/.draco/bin/draco", "mcp"],
+      "enabled": true
+    }
+  }
+}
 ```
 
 The same server is bound on the daemon at `POST /mcp` (minimal Streamable-HTTP
