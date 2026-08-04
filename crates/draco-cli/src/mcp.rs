@@ -569,7 +569,9 @@ fn interact_tool_descriptors() -> Vec<Value> {
                             "properties": {
                                 "type": {
                                     "type": "string",
-                                    "enum": ["click", "type", "press", "scroll", "select", "hover", "wait"]
+                                    "enum": ["click", "type", "press", "scroll", "select", "hover", "wait",
+                                             "clickRef", "typeRef", "pressRef", "scrollRef",
+                                             "selectRef", "hoverRef", "waitRef"]
                                 }
                             },
                             "required": ["type"],
@@ -633,6 +635,20 @@ fn interact_tool_descriptors() -> Vec<Value> {
                 "required": ["sessionId"]
             },
             "annotations": { "readOnlyHint": false, "openWorldHint": false }
+        }),
+        json!({
+            "name": "draco_interact_snapshot",
+            "title": "Snapshot interact session",
+            "description": "Take an A11ySnapshot of the live DOM: role/name/state/text tree with \
+                            refs (e12) on visible+interactive nodes. Refs are stable for the \
+                            session; target them via act actions of type clickRef/typeRef/\
+                            pressRef/scrollRef/selectRef/hoverRef/waitRef.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "sessionId": { "type": "string" } },
+                "required": ["sessionId"]
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false }
         }),
     ]
 }
@@ -1268,6 +1284,17 @@ async fn call_interact(
             }
             body
         }
+        "draco_interact_snapshot" => {
+            let id = required_interact_arg(&args, "sessionId")?;
+            let snapshot = match store.snapshot(id).await {
+                Ok(snapshot) => snapshot,
+                Err(error) => return Ok(interact_store_error(error)),
+            };
+            json!({
+                "success": true,
+                "data": snapshot,
+            })
+        }
         "draco_interact_close" => {
             let id = required_interact_arg(&args, "sessionId")?;
             if let Err(error) = store.close(id).await {
@@ -1532,6 +1559,7 @@ mod tests {
             "draco_interact_open",
             "draco_interact_exec",
             "draco_interact_act",
+            "draco_interact_snapshot",
             "draco_interact_navigate",
             "draco_interact_scrape",
             "draco_interact_close",

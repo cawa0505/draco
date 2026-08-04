@@ -55,6 +55,74 @@ mod interact;
 
 // ---- Public API -----------------------------------------------------------
 
+/// Decode an HTTP response body to UTF-8 following WHATWG encoding sniffing.
+///
+/// Precedence: BOM → Content-Type charset → `<meta charset>` prescan → UTF-8.
+pub fn decode_body(bytes: &[u8], content_type: &str) -> String {
+    use encoding_rs::{Encoding, UTF_16BE, UTF_16LE, UTF_8};
+
+    // 1. BOM (highest confidence)
+    let bom_enc = match bytes.get(..3) {
+        Some([0xEF, 0xBB, 0xBF]) => Some(UTF_8),
+        Some([0xFE, 0xFF]) => Some(UTF_16BE),
+        Some([0xFF, 0xFE]) => Some(UTF_16LE),
+        _ => None,
+    };
+
+    // 2. Content-Type charset parameter
+    let ct_enc = content_type
+        .split(';')
+        .nth(1)
+        .and_then(|params| {
+            params.split(',').find_map(|p| {
+                let (k, v) = p.split_once('=')?;
+                if k.trim().eq_ignore_ascii_case("charset") {
+                    Some(v.trim().trim_matches('"').trim_matches('\''))
+                } else {
+                    None
+                }
+            })
+        })
+        .and_then(|label| Encoding::for_label(label.as_bytes()));
+
+    // 3. <meta charset> prescan (first 1024 bytes)
+    let meta_enc = if bytes.len() > 10 {
+        let head = &bytes[..bytes.len().min(1024)];
+        std::str::from_utf8(head).ok().and_then(|h| {
+            let lower = h.to_ascii_lowercase();
+            let meta_pos = lower.find("<meta")?;
+            let after_meta = &lower[meta_pos..];
+            if let Some(cs_pos) = after_meta.find("charset") {
+                let after_cs = after_meta[cs_pos + 7..].trim_start();
+                if let Some(after_eq) = after_cs.strip_prefix('=') {
+                    let after_eq = after_eq.trim_start();
+                    let end = after_eq
+                        .find(|c: char| ['"', '\'', ' ', ';'].contains(&c))
+                        .unwrap_or(after_eq.len());
+                    let label = after_eq[..end].trim_matches(|c: char| c == '"' || c == '\'');
+                    return Encoding::for_label(label.as_bytes());
+                }
+            }
+            None
+        })
+    } else {
+        None
+    };
+
+    let encoding = bom_enc.or(ct_enc).or(meta_enc).unwrap_or(UTF_8);
+    let (cow, _, _) = encoding.decode(bytes);
+    cow.into_owned()
+}
+
+/// Extract the Content-Type header value from a headers list.
+pub fn content_type_of(headers: &[(String, String)]) -> &str {
+    headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("content-type"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("")
+}
+
 pub use challenge::{detect_challenge, ChallengeKind};
 #[cfg(feature = "tier2")]
 pub use draco_runtime::session::{

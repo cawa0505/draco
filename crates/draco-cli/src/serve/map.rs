@@ -232,7 +232,10 @@ pub(crate) async fn map_site(opts: &MapOptions) -> Result<MapOutcome, MapError> 
         let page_result = fetch_target(opts.target.as_str(), &opts.session).await;
         match &page_result {
             Ok(resp) if resp.meta.status < 400 => {
-                let html = String::from_utf8_lossy(&resp.body);
+                let html = draco_core::decode_body(
+                    &resp.body,
+                    draco_core::content_type_of(&resp.meta.headers),
+                );
                 links.extend(extract_hrefs(&html, &opts.target));
             }
             _ if sitemap_fetched => {
@@ -302,7 +305,10 @@ async fn discover_sitemap_urls(target: &Url, opts: &SessionOpts) -> Vec<Url> {
     if let Ok(robots_url) = target.join("/robots.txt") {
         if let Ok(resp) = fetch_target(robots_url.as_str(), opts).await {
             if resp.meta.status < 400 {
-                let body = String::from_utf8_lossy(&resp.body);
+                let body = draco_core::decode_body(
+                    &resp.body,
+                    draco_core::content_type_of(&resp.meta.headers),
+                );
                 let discovered = parse_robots_sitemaps(&body);
                 if !discovered.is_empty() {
                     return discovered
@@ -364,7 +370,7 @@ async fn fetch_sitemap_links(sitemap_url: &Url, opts: &SessionOpts) -> Option<Ve
     if resp.meta.status >= 400 {
         return None;
     }
-    let body = String::from_utf8_lossy(&resp.body).into_owned();
+    let body = draco_core::decode_body(&resp.body, draco_core::content_type_of(&resp.meta.headers));
     let locs = extract_locs(&body);
     if locs.is_empty() {
         return None;
@@ -377,7 +383,10 @@ async fn fetch_sitemap_links(sitemap_url: &Url, opts: &SessionOpts) -> Option<Ve
         for child in locs.iter().take(MAX_CHILD_SITEMAPS) {
             if let Ok(child_resp) = fetch_target(child, opts).await {
                 if child_resp.meta.status < 400 {
-                    let child_body = String::from_utf8_lossy(&child_resp.body);
+                    let child_body = draco_core::decode_body(
+                        &child_resp.body,
+                        draco_core::content_type_of(&child_resp.meta.headers),
+                    );
                     pages.extend(extract_locs(&child_body));
                 }
             }

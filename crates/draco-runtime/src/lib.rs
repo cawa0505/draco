@@ -626,6 +626,10 @@ struct CaptureState {
     /// one-shot capture path (`run_capture`); it is the devtools-console return
     /// channel for [`session`](crate::session).
     exec_result: Option<String>,
+    /// Serialized JSON of the most recent A11ySnapshot from the page side,
+    /// stashed by `op_raze_a11y_snapshot` and drained per turn. Used by the interact
+    /// snapshot command.
+    a11y_snapshot: Option<String>,
     /// Monotonic clock for this capture, started at isolate construction. The
     /// `[raze.*]` diagnostics stamp `[+{ms}]` off it so `--runtime-log` reads as a
     /// timeline — when each fetch/chunk resolved and when the window closed — the
@@ -1004,6 +1008,15 @@ fn op_raze_exec_result(state: &mut OpState, #[string] json: String) {
     cap.borrow_mut().exec_result = Some(json);
 }
 
+/// Receive the serialized A11ySnapshot JSON from the page side and stash it in
+/// [`CaptureState`] for [`session`](crate::session) to drain. Used by the interact
+/// snapshot command.
+#[deno_core::op2(fast)]
+fn op_raze_a11y_snapshot(state: &mut OpState, #[string] json: String) {
+    let cap = state.borrow::<Rc<RefCell<CaptureState>>>().clone();
+    cap.borrow_mut().a11y_snapshot = Some(json);
+}
+
 /// Sleep `ms` milliseconds, then resolve. Backs the polyfill's timer scheduler.
 /// A pending `op_sleep` future keeps the deno_core event loop non-idle.
 ///
@@ -1052,6 +1065,7 @@ deno_core::extension!(
         op_raze_dom,
         op_raze_exec_result,
         op_raze_log,
+        op_raze_a11y_snapshot,
     ],
     options = { cap: Rc<RefCell<CaptureState>> },
     state = |state, options| {
@@ -1510,6 +1524,7 @@ async fn run_capture_inner(
         rendered_html: None,
         logs: Vec::new(),
         exec_result: None,
+        a11y_snapshot: None,
         started: Instant::now(),
     }));
 
@@ -1863,6 +1878,64 @@ fn serialize_dom(runtime: &mut JsRuntime) {
 
     if let Err(e) = runtime.execute_script("draco:serialize-dom", SERIALIZE_JS) {
         eprintln!("draco-runtime: DOM serialization script failed: {e}");
+    }
+}
+
+/// Serialize the live A11ySnapshot (role/name/state/text + refs) and hand it back
+/// through `op_raze_a11y_snapshot`. Wrapped in an in-page `try/catch` so a throwing
+/// getter can never propagate; a failure to even run the script is swallowed.
+pub(crate) async fn serialize_a11y_snapshot(
+    runtime: &mut JsRuntime,
+    cap: &Rc<RefCell<CaptureState>>,
+    _cfg: &CaptureConfig,
+) -> draco_types::A11ySnapshot {
+    const SERIALIZE_A11Y_JS: &str = r#"(function () {
+        try {
+            // The page-side A11ySnapshot serializer is injected by the glue.
+            var json = (typeof globalThis.__dracoSerializeA11y === "function")
+                ? globalThis.__dracoSerializeA11y()
+                : null;
+            if (json != null) {
+                Deno.core.ops.op_raze_a11y_snapshot(json);
+            }
+        } catch (_e) {
+            // Swallow any page-side errors; the Rust side will return an empty snapshot.
+        }
+    })()"#;
+
+    // Execute the snapshot script.
+    if let Err(e) = runtime.execute_script("draco:serialize-a11y", SERIALIZE_A11Y_JS) {
+        eprintln!("draco-runtime: A11ySnapshot serialization script failed: {e}");
+    }
+
+    // Drain the captured snapshot JSON from the capture state.
+    let snapshot_json = {
+        let mut cap = cap.borrow_mut();
+        cap.a11y_snapshot.take()
+    };
+
+    match snapshot_json {
+        Some(json) => {
+            // Parse the JSON into the A11ySnapshot wire format.
+            match serde_json::from_str::<draco_types::A11ySnapshot>(&json) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    eprintln!("draco-runtime: A11ySnapshot JSON parse failed: {e}");
+                    draco_types::A11ySnapshot {
+                        url: String::new(),
+                        nodes: Vec::new(),
+                        refs: false,
+                        truncated: true,
+                    }
+                }
+            }
+        }
+        None => draco_types::A11ySnapshot {
+            url: String::new(),
+            nodes: Vec::new(),
+            refs: false,
+            truncated: true,
+        },
     }
 }
 
@@ -3336,6 +3409,7 @@ mod tests {
             rendered_html: None,
             logs: Vec::new(),
             exec_result: None,
+            a11y_snapshot: None,
             started: Instant::now(),
         };
         for _ in 0..50 {
@@ -3370,6 +3444,7 @@ mod tests {
             rendered_html: Some("<html>unused on boot failure</html>".to_string()),
             logs: vec!["boot diagnostic".to_string()],
             exec_result: None,
+            a11y_snapshot: None,
             started: Instant::now(),
         }));
 
@@ -3400,6 +3475,7 @@ mod tests {
             rendered_html: None,
             logs: Vec::new(),
             exec_result: None,
+            a11y_snapshot: None,
             started: Instant::now(),
         };
         let phases = [

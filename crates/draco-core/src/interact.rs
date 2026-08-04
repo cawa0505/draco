@@ -33,7 +33,7 @@ impl draco_runtime::session::PageFetcher for NetPageFetcher {
             match draco_net::fetch_target(url, &self.opts).await {
                 Ok(resp) if (200..300).contains(&resp.meta.status) => Some((
                     resp.meta.final_url.clone(),
-                    String::from_utf8_lossy(&resp.body).into_owned(),
+                    crate::decode_body(&resp.body, crate::content_type_of(&resp.meta.headers)),
                 )),
                 _ => None,
             }
@@ -57,7 +57,7 @@ pub async fn open_interact_session(
     }
 
     let resp = draco_net::fetch_target(url, &opts).await?;
-    let html = String::from_utf8_lossy(&resp.body).into_owned();
+    let html = crate::decode_body(&resp.body, crate::content_type_of(&resp.meta.headers));
     let final_url = resp.meta.final_url.clone();
 
     let network_opts = subresource_opts(&opts);
@@ -151,6 +151,30 @@ pub fn scrape_interact_html(
         trace,
         error: None,
     }
+}
+
+/// Open an interact session and return its ID plus an initial A11ySnapshot.
+///
+/// This is the entry point for the `draco_interact_open` MCP tool. It creates a
+/// live session for the given URL and immediately captures an A11ySnapshot of the
+/// hydrated DOM.
+pub async fn open_interact_snapshot(
+    url: &str,
+    config: &Config,
+) -> Result<draco_runtime::session::Session, DracoError> {
+    open_interact_session(url, config).await
+}
+
+/// Take an A11ySnapshot of a live interact session.
+///
+/// This is the entry point for the `interact_snapshot` MCP tool. It captures the
+/// current A11ySnapshot from the session's live DOM.
+pub async fn snapshot_interact(
+    session: &draco_runtime::session::Session,
+) -> Result<draco_types::A11ySnapshot, DracoError> {
+    session.snapshot().await.map_err(|e| DracoError::Runtime {
+        detail: e.to_string(),
+    })
 }
 
 #[cfg(test)]

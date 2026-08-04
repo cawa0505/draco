@@ -198,6 +198,10 @@ enum Command {
     Serialize {
         reply: oneshot::Sender<Option<String>>,
     },
+    /// Take an A11ySnapshot of the live DOM (role/name/state/text + refs).
+    Snapshot {
+        reply: oneshot::Sender<draco_types::A11ySnapshot>,
+    },
     /// Navigate to `url`: fetch the next document (cookie-aware), tear down the
     /// current isolate, and re-hydrate in place.
     Navigate {
@@ -269,6 +273,25 @@ pub enum Action {
         #[serde(default, alias = "ms")]
         milliseconds: Option<u64>,
     },
+    /// Click an element via snapshot ref (e.g. "e12").
+    ClickRef { r#ref: String },
+    /// Type into a field identified by snapshot ref.
+    TypeRef {
+        r#ref: String,
+        text: String,
+        #[serde(default = "default_true")]
+        clear: bool,
+    },
+    /// Press a key on an element identified by snapshot ref.
+    PressRef { r#ref: String, key: String },
+    /// Scroll an element into view identified by snapshot ref.
+    ScrollRef { r#ref: String },
+    /// Select a value on an element identified by snapshot ref.
+    SelectRef { r#ref: String, value: String },
+    /// Hover over an element identified by snapshot ref.
+    HoverRef { r#ref: String },
+    /// Wait for an element identified by snapshot ref to appear.
+    WaitRef { r#ref: String },
 }
 
 fn default_true() -> bool {
@@ -281,8 +304,12 @@ pub struct ActStep {
     /// A short label for the action (e.g. `click a.login`).
     pub action: String,
     pub ok: bool,
-    /// Why this step failed (selector not found, JS throw, wait timeout).
+    /// Why this step failed (selector not known, JS throw, wait timeout).
     pub error: Option<String>,
+    /// Machine-readable error code (e.g. `REF_NOT_FOUND`).
+    pub code: Option<String>,
+    /// Human suggested next action.
+    pub hint: Option<String>,
 }
 
 /// Outcome of a [`Session::act`] batch. `ok` is true iff every step succeeded;
@@ -394,6 +421,17 @@ impl Session {
         let (reply, rx) = oneshot::channel();
         self.cmd_tx
             .send(Command::Serialize { reply })
+            .map_err(|_| SessionError::Closed)?;
+        rx.await.map_err(|_| SessionError::Closed)
+    }
+
+    /// Take an A11ySnapshot of the live DOM: role/name/state/text tree with refs
+    /// on visible+interactive nodes. Refs are session-scoped (stable across
+    /// snapshots); target them with the `*Ref` [`Action`] variants.
+    pub async fn snapshot(&self) -> Result<draco_types::A11ySnapshot, SessionError> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(Command::Snapshot { reply })
             .map_err(|_| SessionError::Closed)?;
         rx.await.map_err(|_| SessionError::Closed)
     }
@@ -601,6 +639,11 @@ async fn actor_main(
                         let _ = reply.send(report);
                         if close { break; }
                     }
+                    Some(Command::Snapshot { reply }) => {
+                        let current = active.as_mut().unwrap();
+                        let snapshot = crate::serialize_a11y_snapshot(&mut current.runtime, &current.cap, &config.capture).await;
+                        let _ = reply.send(snapshot);
+                    }
                     Some(Command::Close { reply }) => {
                         let _ = reply.send(());
                         break;
@@ -672,6 +715,7 @@ async fn hydrate(
         rendered_html: None,
         logs: Vec::new(),
         exec_result: None,
+        a11y_snapshot: None,
         started: Instant::now(),
     }));
 
@@ -1149,13 +1193,28 @@ async fn do_act(
                 )
                 .await
             }
+            Action::WaitRef { r#ref } => {
+                wait_ref_action(runtime, cap, cfg, r#ref, heap_guard).await
+            }
             _ => run_action_snippet(runtime, cap, &build_action_js(action), heap_guard),
         };
         let ok = outcome.is_ok();
+        let (code, hint) = match outcome {
+            Err(ref e) if e.starts_with("ref not found: ") => (
+                Some("REF_NOT_FOUND".to_string()),
+                Some(
+                    "ref not in current snapshot — page may have navigated; re-snapshot"
+                        .to_string(),
+                ),
+            ),
+            _ => (None, None),
+        };
         steps.push(ActStep {
             action: label,
             ok,
             error: outcome.err(),
+            code,
+            hint,
         });
         if !ok {
             all_ok = false;
@@ -1213,6 +1272,13 @@ fn action_label(a: &Action) -> String {
             (None, Some(ms)) => format!("wait {ms}ms"),
             _ => "wait".to_string(),
         },
+        Action::ClickRef { r#ref } => format!("click ref {}", r#ref),
+        Action::TypeRef { r#ref, .. } => format!("type ref {}", r#ref),
+        Action::PressRef { r#ref, .. } => format!("press ref {}", r#ref),
+        Action::ScrollRef { r#ref } => format!("scroll ref {}", r#ref),
+        Action::SelectRef { r#ref, .. } => format!("select ref {}", r#ref),
+        Action::HoverRef { r#ref } => format!("hover ref {}", r#ref),
+        Action::WaitRef { r#ref } => format!("wait ref {}", r#ref),
     }
 }
 
@@ -1300,6 +1366,41 @@ async fn wait_action(
     }
 }
 
+/// `wait` on a snapshot ref: poll until the ref resolves to an element in the
+/// page-side ref index, ceilinged by the capture window. Mirrors the selector
+/// path; the ref index is session-scoped so the lookup survives re-renders.
+async fn wait_ref_action(
+    runtime: &mut JsRuntime,
+    cap: &Rc<RefCell<CaptureState>>,
+    cfg: &CaptureConfig,
+    r#ref: &str,
+    heap_guard: &HeapLimitGuard,
+) -> Result<(), String> {
+    const REF_PRESENT_JS: &str = r#"try { Deno.core.ops.op_raze_exec_result((typeof __dracoRefEl === "function" && __dracoRefEl(__REF__)) ? "1" : "0"); } catch (_e) { try { Deno.core.ops.op_raze_exec_result("0"); } catch (_e2) {} }"#;
+    let check_js = REF_PRESENT_JS.replace("__REF__", &json_string_literal(r#ref));
+    let ceiling = Duration::from_millis(cfg.capture_window_ms);
+    let start = Instant::now();
+    loop {
+        let _ = heap_guard
+            .run(|| poll_once(runtime))
+            .map_err(|_| HEAP_LIMIT_DIAGNOSTIC.to_string())?;
+        cap.borrow_mut().exec_result = None;
+        let _ = heap_guard
+            .run(|| runtime.execute_script("draco:interact:wait-ref", check_js.clone()))
+            .map_err(|_| HEAP_LIMIT_DIAGNOSTIC.to_string())?;
+        let _ = heap_guard
+            .run(|| poll_once(runtime))
+            .map_err(|_| HEAP_LIMIT_DIAGNOSTIC.to_string())?;
+        if cap.borrow().exec_result.as_deref() == Some("1") {
+            return Ok(());
+        }
+        if start.elapsed() >= ceiling {
+            return Err(format!("wait timed out for ref: {}", r#ref));
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// Build the page-scope event snippet for a (non-`wait`) action. Placeholder
 /// substitution (not `format!`) keeps the embedded JS free of brace-escaping.
 fn build_action_js(action: &Action) -> String {
@@ -1334,6 +1435,40 @@ fn build_action_js(action: &Action) -> String {
         Action::Hover { selector } => HOVER_JS.replace("__SEL__", &json_string_literal(selector)),
         // `wait` never reaches here (handled Rust-side in `do_act`).
         Action::Wait { .. } => {
+            "Deno.core.ops.op_raze_exec_result(JSON.stringify({ok:true}));".to_string()
+        }
+        // Snapshot-ref variants: resolve via the page-side ref index and reuse the
+        // same event snippets. `__dracoRefEl` returns null for an unknown/expired
+        // ref, which surfaces as a "ref not found" error instead of a selector one.
+        Action::ClickRef { r#ref } => CLICK_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("selector not found: ", "ref not found: ")
+            .replace("__SEL__", &json_string_literal(r#ref)),
+        Action::TypeRef { r#ref, text, clear } => TYPE_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("__CLEAR__", if *clear { "true" } else { "false" })
+            .replace("__SEL__", &json_string_literal(r#ref))
+            .replace("__TEXT__", &json_string_literal(text)),
+        Action::PressRef { r#ref, key } => PRESS_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("__SEL__", &json_string_literal(r#ref))
+            .replace("__KEY__", &json_string_literal(key)),
+        Action::ScrollRef { r#ref } => SCROLL_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("selector not found: ", "ref not found: ")
+            .replace("__SEL__", &json_string_literal(r#ref))
+            .replace("__DIR__", &json_string_literal("down")),
+        Action::SelectRef { r#ref, value } => SELECT_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("selector not found: ", "ref not found: ")
+            .replace("__SEL__", &json_string_literal(r#ref))
+            .replace("__VALUE__", &json_string_literal(value)),
+        Action::HoverRef { r#ref } => HOVER_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("selector not found: ", "ref not found: ")
+            .replace("__SEL__", &json_string_literal(r#ref)),
+        // Handled Rust-side in `do_act`, mirroring `Wait`.
+        Action::WaitRef { .. } => {
             "Deno.core.ops.op_raze_exec_result(JSON.stringify({ok:true}));".to_string()
         }
     };

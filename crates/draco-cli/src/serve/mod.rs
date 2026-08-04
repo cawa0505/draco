@@ -207,6 +207,10 @@ fn router(state: Arc<AppState>) -> Router {
         )
         .route("/v1/interact/{id}/scrape", post(interact::scrape_handler))
         .route(
+            "/v1/interact/{id}/snapshot",
+            post(interact::snapshot_handler),
+        )
+        .route(
             "/v1/interact/{id}",
             axum::routing::delete(interact::close_handler),
         );
@@ -377,7 +381,7 @@ async fn scrape(
             return (StatusCode::BAD_REQUEST, Json(error_body(&e)));
         }
     }
-    if formats.select && req.selectors.as_deref().map_or(true, |s| s.is_empty()) {
+    if formats.select && req.selectors.as_deref().is_none_or(|s| s.is_empty()) {
         return (
             StatusCode::BAD_REQUEST,
             Json(error_body(

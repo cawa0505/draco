@@ -781,7 +781,10 @@ impl EngineFetcher for NetFetcher {
             Ok(EngineResponse {
                 status: response.meta.status,
                 final_url: response.meta.final_url,
-                body: String::from_utf8_lossy(&response.body).into_owned(),
+                body: draco_core::decode_body(
+                    &response.body,
+                    draco_core::content_type_of(&response.meta.headers),
+                ),
             })
         })
     }

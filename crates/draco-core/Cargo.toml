@@ -43,6 +43,7 @@ async-trait = "0.1"
 # capture onto `tokio::task::spawn_blocking` ("rt"), and the daemon's Tier2Pool
 # bounds concurrent isolates with a `Semaphore` ("sync"). Optional + tier2-gated
 # so the lean build does not require a tokio dependency here.
+encoding_rs = "0.8"
 tokio = { workspace = true, optional = true, features = ["rt", "sync"] }
 
 [dev-dependencies]

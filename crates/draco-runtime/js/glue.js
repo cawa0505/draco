@@ -819,4 +819,411 @@
   g.__dracoSerialize = function () {
     try { return w.document.documentElement.outerHTML; } catch (_) { return ""; }
   };
+
+  // Expose the A11ySnapshot serializer for interact snapshot.
+  g.__dracoSerializeA11y = function () {
+    try {
+      // Walk the DOM and produce an A11ySnapshot matching draco-types.
+      // This is a simplified implementation; the full spec requires:
+      // - Hidden: drop STYLE/SCRIPT/NOSCRIPT/TEMPLATE; display:none / visibility:hidden
+      // - Role: explicit role= attr → else tag mapping
+      // - Name: accname order (aria-labelledby > aria-label > label/alt/value > content)
+      // - States per-role applicability
+      // - Refs: eN counter, cached per element in a session WeakMap (stable across snapshots)
+      // - Bounds: MAX_NODES (2000), name truncation (200 chars) → truncated=true
+      // For now, return an empty snapshot to satisfy the interface.
+      return JSON.stringify({
+        url: w.location ? w.location.href : "",
+        nodes: [],
+        refs: false,
+        truncated: false,
+      });
+    } catch (_) {
+      return JSON.stringify({
+        url: "",
+        nodes: [],
+        refs: false,
+        truncated: true,
+      });
+    }
+  };
+
+  // Session-scoped WeakMap for stable refs across snapshots.
+  // Each element gets an "eN" ref (e.g., "e12") when visible and interactive.
+  // The map is stored on the window to persist across snapshots.
+  if (!g.__dracoA11yRefMap) {
+    g.__dracoA11yRefMap = new WeakMap();
+  }
+  if (!g.__dracoA11yRefCounter) {
+    g.__dracoA11yRefCounter = 1;
+  }
+
+  // Reverse index: ref string → element, for act-by-ref targeting. Plain Map
+  // (a WeakMap can't be iterated); bounded by MAX_NODES refs, lives for the
+  // session. `__dracoRefEl` is the page-side lookup the action snippets call.
+  if (!g.__dracoA11yRefIndex) {
+    g.__dracoA11yRefIndex = new Map();
+  }
+  g.__dracoRefEl = function (ref) {
+    return g.__dracoA11yRefIndex.get(ref) || null;
+  };
+
+  // Helper: check if element is hidden (display:none, visibility:hidden, aria-hidden)
+  function isHidden(el) {
+    if (!el || !el.nodeType) return true;
+    if (el.nodeType === 1) { // Element
+      const style = w.getComputedStyle ? w.getComputedStyle(el) : null;
+      if (style) {
+        if (style.display === "none" || style.visibility === "hidden") return true;
+      }
+      if (el.hasAttribute("aria-hidden") && el.getAttribute("aria-hidden") === "true") return true;
+      // Recursively check ancestors
+      let parent = el.parentElement;
+      while (parent) {
+        const pStyle = w.getComputedStyle ? w.getComputedStyle(parent) : null;
+        if (pStyle && (pStyle.display === "none" || pStyle.visibility === "hidden")) return true;
+        if (parent.hasAttribute("aria-hidden") && parent.getAttribute("aria-hidden") === "true") return true;
+        parent = parent.parentElement;
+      }
+    }
+    return false;
+  }
+
+  // Helper: map tag/role to A11y role
+  function getRole(el) {
+    // Explicit role attribute takes precedence
+    const roleAttr = el.getAttribute("role");
+    if (roleAttr) {
+      // Normalize: lowercase, strip whitespace
+      return roleAttr.trim().toLowerCase();
+    }
+    // Tag-based mapping
+    const tag = el.tagName.toLowerCase();
+    switch (tag) {
+      case "button": return "button";
+      case "a": return "link";
+      case "input": {
+        const type = el.getAttribute("type");
+        if (type === "checkbox") return "checkbox";
+        if (type === "radio") return "radio";
+        if (type === "text" || type === "password" || type === "email" || type === "number" || type === "textarea") return "textbox";
+        return "button";
+      }
+      case "select": return "combobox";
+      case "option": return "option";
+      case "textarea": return "textbox";
+      case "img": return "image";
+      case "h1": return "heading";
+      case "h2": return "heading";
+      case "h3": return "heading";
+      case "h4": return "heading";
+      case "h5": return "heading";
+      case "h6": return "heading";
+      case "nav": return "navigation";
+      case "main": return "main";
+      case "header": return "banner";
+      case "footer": return "contentinfo";
+      case "ul": return "list";
+      case "li": return "listitem";
+      case "table": return "table";
+      case "tr": return "row";
+      case "td": return "cell";
+      case "th": return "columnheader";
+      case "form": return "form";
+      case "label": return "label";
+      case "fieldset": return "group";
+      case "legend": return "legend";
+      case "article": return "article";
+      case "section": return "region";
+      case "aside": return "complementary";
+      case "details": return "details";
+      case "summary": return "summary";
+      case "dialog": return "dialog";
+      case "menu": return "menu";
+      case "menuitem": return "menuitem";
+      case "tab": return "tab";
+      case "tabpanel": return "tabpanel";
+      case "alert": return "alert";
+      case "progressbar": return "progressbar";
+      case "separator": return "separator";
+      case "slider": return "slider";
+      case "spinbutton": return "spinbutton";
+      case "switch": return "switch";
+      case "meter": return "meter";
+      case "canvas": return "img";
+      default: return "generic";
+    }
+  }
+
+  // Helper: compute accessible name (accname order)
+  function getName(el) {
+    const role = getRole(el);
+    // Roles that prohibit name-from-content
+    const noContentRoles = ["separator", "slider", "progressbar", "meter", "img", "canvas"];
+    if (noContentRoles.includes(role)) return "";
+
+    // aria-labelledby
+    const labelledby = el.getAttribute("aria-labelledby");
+    if (labelledby) {
+      const ids = labelledby.split("\s+").filter(id => id);
+      for (const id of ids) {
+        const namedEl = w.document.getElementById(id);
+        if (namedEl) {
+          const name = getNameFromElement(namedEl);
+          if (name) return name;
+        }
+      }
+    }
+
+    // aria-label
+    const ariaLabel = el.getAttribute("aria-label");
+    if (ariaLabel) return ariaLabel.trim();
+
+    // label association
+    if (role === "textbox" || role === "checkbox" || role === "radio" || role === "switch") {
+      const id = el.id;
+      if (id) {
+        const label = w.document.querySelector(`label[for="${id}"]`);
+        if (label) {
+          const name = getNameFromElement(label);
+          if (name) return name;
+        }
+      }
+    }
+
+    // alt attribute for images
+    if (role === "image") {
+      const alt = el.getAttribute("alt");
+      if (alt !== null) return alt === "" ? "" : alt;
+    }
+
+    // title attribute
+    const title = el.getAttribute("title");
+    if (title) return title.trim();
+
+    // placeholder for inputs
+    if (role === "textbox") {
+      const placeholder = el.getAttribute("placeholder");
+      if (placeholder) return placeholder;
+    }
+
+    // value attribute for form controls
+    if (role === "checkbox" || role === "radio" || role === "switch") {
+      const val = el.getAttribute("value");
+      if (val) return val;
+    }
+
+    // content (text nodes) for roles allowing name-from-content
+    const content = getTextContent(el);
+    if (content) return content;
+
+    return "";
+  }
+
+  // Helper: get name from an element (for aria-labelledby)
+  function getNameFromElement(el) {
+    const role = getRole(el);
+    if (role === "image") {
+      const alt = el.getAttribute("alt");
+      if (alt !== null) return alt === "" ? "" : alt;
+    }
+    if (role === "textbox" || role === "checkbox" || role === "radio" || role === "switch") {
+      const val = el.getAttribute("value");
+      if (val) return val;
+    }
+    if (role === "button") {
+      const ariaLabel = el.getAttribute("aria-label");
+      if (ariaLabel) return ariaLabel.trim();
+    }
+    const content = getTextContent(el);
+    if (content) return content;
+    return "";
+  }
+
+  // Helper: get text content (excluding script/style)
+  function getTextContent(el) {
+    let text = "";
+    for (let node = el.firstChild; node; node = node.nextSibling) {
+      if (node.nodeType === 3) { // Text node
+        text += node.textContent;
+      } else if (node.nodeType === 1) { // Element
+        // Skip hidden elements
+        if (isHidden(node)) continue;
+        // Recursively get text from children
+        const childText = getTextContent(node);
+        if (childText) text += childText;
+      }
+    }
+    return text.trim();
+  }
+
+  // Helper: check if element is interactive (eligible for refs)
+  function isInteractive(el) {
+    const role = getRole(el);
+    const interactiveRoles = [
+      "button", "link", "textbox", "checkbox", "radio", "combobox", "option",
+      "menu", "menuitem", "tab", "tabpanel", "switch", "slider", "spinbutton",
+      "progressbar", "separator", "alert", "dialog", "details", "summary"
+    ];
+    if (!interactiveRoles.includes(role)) return false;
+    if (isHidden(el)) return false;
+    return true;
+  }
+
+  // Helper: get element states based on role
+  function getStates(el) {
+    const role = getRole(el);
+    const states = {};
+
+    // Common states across roles
+    if (el.hasAttribute("aria-disabled") && el.getAttribute("aria-disabled") === "true") {
+      states.disabled = true;
+    }
+    if (el.hasAttribute("aria-expanded") && el.getAttribute("aria-expanded") === "true") {
+      states.expanded = true;
+    } else if (el.hasAttribute("aria-expanded") && el.getAttribute("aria-expanded") === "false") {
+      states.expanded = false;
+    }
+    if (el.hasAttribute("aria-selected") && el.getAttribute("aria-selected") === "true") {
+      states.selected = true;
+    } else if (el.hasAttribute("aria-selected") && el.getAttribute("aria-selected") === "false") {
+      states.selected = false;
+    }
+    if (el.hasAttribute("aria-pressed") && el.getAttribute("aria-pressed") === "true") {
+      states.pressed = true;
+    } else if (el.hasAttribute("aria-pressed") && el.getAttribute("aria-pressed") === "false") {
+      states.pressed = false;
+    }
+    if (el.hasAttribute("aria-invalid") && el.getAttribute("aria-invalid") !== "false") {
+      states.invalid = el.getAttribute("aria-invalid") || "true";
+    }
+
+    // Role-specific states
+    if (role === "checkbox" || role === "radio" || role === "switch") {
+      const checked = el.getAttribute("aria-checked");
+      if (checked) states.checked = checked;
+    }
+
+    if (role === "heading") {
+      const level = el.tagName.match(/^H([1-6])$/);
+      if (level) states.level = parseInt(level[1]);
+    }
+
+    return states;
+  }
+
+  // Helper: get element properties (url, placeholder, value)
+  function getProps(el) {
+    const role = getRole(el);
+    const props = {};
+
+    if (role === "link") {
+      const href = el.getAttribute("href");
+      if (href) props.url = href;
+    }
+
+    if (role === "textbox") {
+      const placeholder = el.getAttribute("placeholder");
+      if (placeholder) props.placeholder = placeholder;
+      const value = el.value || el.textContent || "";
+      if (value) props.value = value;
+    }
+
+    if (role === "image") {
+      const src = el.getAttribute("src");
+      if (src) props.url = src;
+    }
+
+    return props;
+  }
+
+  // Main A11ySnapshot serializer
+  g.__dracoSerializeA11y = function () {
+    try {
+      const url = w.location ? w.location.href : "";
+      const nodes = [];
+      let truncated = false;
+      let nodeCount = 0;
+      const MAX_NODES = 2000;
+      const NAME_MAX_LEN = 200;
+
+      // Walk the DOM recursively
+      function walk(el, depth = 0) {
+        if (nodeCount >= MAX_NODES) {
+          truncated = true;
+          return;
+        }
+
+        if (!el || !el.nodeType) return;
+
+        // Skip non-element nodes and hidden elements
+        if (el.nodeType !== 1) {
+          return;
+        }
+
+        if (isHidden(el)) {
+          return;
+        }
+
+        const role = getRole(el);
+        const name = getName(el);
+        const truncatedName = name.length > NAME_MAX_LEN ? name.substring(0, NAME_MAX_LEN) : name;
+        const states = getStates(el);
+        const props = Object.keys(getProps(el)).length > 0 ? getProps(el) : null;
+
+        // Determine if element gets a ref
+        let ref = null;
+        if (isInteractive(el)) {
+          if (!g.__dracoA11yRefMap.has(el)) {
+            g.__dracoA11yRefMap.set(el, `e${g.__dracoA11yRefCounter}`);
+            g.__dracoA11yRefIndex.set(`e${g.__dracoA11yRefCounter}`, el);
+            g.__dracoA11yRefCounter++;
+          }
+          ref = g.__dracoA11yRefMap.get(el);
+        }
+
+        // Build node
+        const node = {
+          role: role,
+          name: truncatedName,
+          ref: ref,
+          level: states.level || null,
+          checked: states.checked || null,
+          disabled: states.disabled || null,
+          expanded: states.expanded || null,
+          selected: states.selected || null,
+          pressed: states.pressed || null,
+          invalid: states.invalid || null,
+          props: props,
+          children: []
+        };
+
+        nodes.push(node);
+        nodeCount++;
+
+        // Recursively process children
+        for (let child = el.firstChild; child; child = child.nextSibling) {
+          walk(child, depth + 1);
+        }
+      }
+
+      // Start from document body or html
+      const root = w.document.body || w.document.documentElement;
+      walk(root);
+
+      return JSON.stringify({
+        url: url,
+        nodes: nodes,
+        refs: true, // We always generate refs for interactive elements
+        truncated: truncated
+      });
+    } catch (e) {
+      return JSON.stringify({
+        url: "",
+        nodes: [],
+        refs: false,
+        truncated: true,
+      });
+    }
+  };
 })();

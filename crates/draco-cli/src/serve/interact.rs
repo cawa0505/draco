@@ -273,6 +273,23 @@ impl SessionStore {
         ))
     }
 
+    pub(crate) async fn snapshot(
+        &self,
+        id: &str,
+    ) -> Result<draco_types::A11ySnapshot, SessionStoreError> {
+        let (handle, _) = self.acquire(id)?;
+        let guard = handle.lock().await;
+        let snapshot = guard
+            .as_ref()
+            .ok_or(SessionStoreError::Closed)?
+            .snapshot()
+            .await
+            .map_err(|e| SessionStoreError::Runtime(e.to_string()))?;
+        drop(guard);
+        self.touch(id);
+        Ok(snapshot)
+    }
+
     pub(crate) async fn close(&self, id: &str) -> Result<(), SessionStoreError> {
         let entry = self
             .lock_sessions()
@@ -456,6 +473,19 @@ pub(crate) async fn exec_handler(
     }
 }
 
+pub(crate) async fn snapshot_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> (StatusCode, Json<Value>) {
+    match state.sessions.snapshot(&id).await {
+        Ok(snapshot) => (
+            StatusCode::OK,
+            Json(json!({ "success": true, "data": snapshot })),
+        ),
+        Err(error) => store_error_response(error),
+    }
+}
+
 pub(crate) async fn navigate_handler(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -546,6 +576,8 @@ pub(crate) async fn act_handler(
                             "action": step.action,
                             "ok": step.ok,
                             "error": step.error,
+                            "code": step.code,
+                            "hint": step.hint,
                         })
                     })
                     .collect(),

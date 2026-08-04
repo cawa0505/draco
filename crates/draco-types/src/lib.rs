@@ -145,6 +145,50 @@ pub struct SelectorMatch {
     pub matches: Vec<SelectorValue>,
 }
 
+/// A11yProps: optional element properties (url, placeholder, value).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct A11yProps {
+    pub url: Option<String>,
+    pub placeholder: Option<String>,
+    pub value: Option<String>,
+}
+
+/// A11yNode: role/name/state/text snapshot node.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct A11yNode {
+    pub role: String,
+    pub name: String,
+    pub r#ref: Option<String>,
+    pub level: Option<u32>,
+    pub checked: Option<String>,
+    pub disabled: Option<bool>,
+    pub expanded: Option<bool>,
+    pub selected: Option<bool>,
+    pub pressed: Option<bool>,
+    pub invalid: Option<String>,
+    pub props: Option<A11yProps>,
+    pub children: Vec<A11yNode>,
+}
+
+/// A11ySnapshot: complete snapshot with metadata.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct A11ySnapshot {
+    pub url: String,
+    pub nodes: Vec<A11yNode>,
+    pub refs: bool,
+    pub truncated: bool,
+}
+
+/// Error code for REF_NOT_FOUND.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RefErrorCode {
+    RefNotFound,
+}
+
 /// One matched element.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SelectorValue {

@@ -355,6 +355,10 @@ pub(crate) async fn run_with_pool(
 /// booting an isolate. When the crate is built without the `tier2` feature, the
 /// Tier 2 branch never touches `capture`; it records a "built without tier2" note
 /// and finalizes `Unsupported`.
+// `body`, `challenge`, `opts` are mutated only in the `tier2`-gated retry
+// block; without that feature they appear immutable. Allow unconditionally
+// rather than scattering `#[allow]` on each binding.
+#[allow(unused_mut)]
 pub(crate) async fn run_ladder<F, S, T>(
     url: &str,
     config: &Config,
@@ -416,7 +420,7 @@ where
         }
     };
 
-    let mut body = String::from_utf8_lossy(&resp.body).into_owned();
+    let mut body = crate::decode_body(&resp.body, crate::content_type_of(&resp.meta.headers));
 
     // ---- Challenge short-circuit (spec §3) -----------------------------
     let mut challenge = detect_challenge(resp.meta.status, &resp.meta.headers, &body);
@@ -425,6 +429,11 @@ where
     // than booting Chromium; a second challenge still escalates exactly as before.
     // Keep this scoped to 403: draco-net already retries 429/503, and 200
     // interstitials are deliberate challenge documents rather than status noise.
+    // The 403 cooldown retry avoids booting Chromium for transient WAF
+    // challenges. It requires `tokio::time::sleep` (tier2 feature). Without
+    // tier2 the retry is moot — there's no Chromium to avoid — so the
+    // candidate is accepted as-is.
+    #[cfg(feature = "tier2")]
     if let Some(first_kind) = challenge {
         if resp.meta.status == 403 {
             let retry_started = Instant::now();
@@ -432,7 +441,10 @@ where
             match fetcher.fetch(url, &opts).await {
                 Ok(retry_resp) => {
                     let net_ms = retry_started.elapsed().as_millis() as u64;
-                    let retry_body = String::from_utf8_lossy(&retry_resp.body).into_owned();
+                    let retry_body = crate::decode_body(
+                        &retry_resp.body,
+                        crate::content_type_of(&retry_resp.meta.headers),
+                    );
                     let retry_challenge = detect_challenge(
                         retry_resp.meta.status,
                         &retry_resp.meta.headers,
