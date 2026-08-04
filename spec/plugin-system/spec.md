@@ -1,4 +1,4 @@
-# v0.24.0 Extensible Plugin Architecture
+# v0.25.0 Extensible Plugin Architecture
 
 **Status:** approved proposal  
 **Target:** `draco-core` and MCP-facing pipeline  
@@ -85,7 +85,7 @@ The registry needs heterogeneous trait objects. Native `async fn` in traits is
 not object-safe for this use, so Phase 1 uses `async_trait`. Its boxed-future
 cost must be measured; “zero-cost” is an acceptance target, not an assumption.
 
-Rust trait-object ABI is not stable, so v0.24.0 does not load `.so` / `.dylib`
+Rust trait-object ABI is not stable, so v0.25.0 does not load `.so` / `.dylib`
 plugins. Dynamic loading is a separate future design requiring a stable ABI,
 version negotiation, resource limits, and crash isolation. No speculative
 dynamic-loader scaffolding is included now.

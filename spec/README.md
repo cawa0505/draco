@@ -18,4 +18,4 @@
 
 ## 下一個 OpenSpec 標的
 
-- `plugin-system/spec.md` — v0.24.0 microkernel plugin pipeline，approved proposal
+- `plugin-system/spec.md` — v0.25.0 microkernel plugin pipeline，approved proposal

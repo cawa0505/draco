@@ -118,7 +118,7 @@ session、`Mcp-Session-Id` 與 `Accept` 語意。完成前，local stdio 仍是�
 已完成內容見版本演進。保留一項尚未決定的延伸：是否讓靜態 scrape path 也輸出
 accessibility format；目前 interact live DOM 是唯一正式 snapshot path。
 
-### Phase 2 — Session 工具補齊（已實作，未發布）
+### Phase 2 — Session 工具補齊（v0.24.0，已實作，待發布）
 
 已完成 text-match / DOM-visible `wait_for`、session 累積的 network / console
 viewer、`fill_form` batch sugar，以及 bounded history stack 的 `navigate_back`。
@@ -144,7 +144,7 @@ Screenshot、真實 layout、resize、overlay hit-testing、OS-level file upload
 真實 DataTransfer DnD 不由 happy-dom 假造。現階段保留外部真實瀏覽器工具作為
 互補方案；待純 Rust browser engine 成熟後，再評估 opt-in integration。
 
-### Phase 5 — Extensible Plugin System（v0.24.0，提案）
+### Phase 5 — Extensible Plugin System（v0.25.0，提案）
 
 Roadmap 文件只記錄方向，實作必須等本文件與 plugin spec 對齊後才開始。
 目前狀態是 **proposal / approved for planning**，不是 implemented：
@@ -158,7 +158,7 @@ Roadmap 文件只記錄方向，實作必須等本文件與 plugin spec 對齊�
 - public repository 只提供框架與 generic contract，不放任何外部實作、憑證或
   plugin-specific code。
 
-`spec/plugin-system/spec.md` 是 v0.24.0 的準則；先完成 roadmap 文件校正，
+`spec/plugin-system/spec.md` 是 v0.25.0 的準則；先完成 roadmap 文件校正，
 再進入 trait / registry / pipeline integration 的實作規劃。
 
 ## 長期原則

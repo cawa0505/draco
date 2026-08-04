@@ -1,8 +1,10 @@
 # Draco (fork)
 
-> **Draco (fork)**: "Born out of frustration with bloated browser snapshots. An ultra-dehydrated Rust MCP server with zero browser-boot overhead, trimming AI token consumption by up to 80%."
+> **Draco (fork)**: "Born out of frustration with bloated browser snapshots. An ultra-dehydrated Rust MCP server with zero browser-boot overhead and compact agent-facing output."
 
 A fast, stealth, **native-Rust web scraper** — a lighter alternative to Firecrawl and Browserbase. Point it at a URL and get clean **Markdown + metadata** back, using a browser-faithful TLS/JA4 fingerprint to reach pages that block ordinary clients. No Node, no headless-Chrome fleet, no per-request browser boot.
+
+Current development version: **v0.24.0**, adding the completed Phase 2 interact session tools. The plugin framework and any unfinished pre-Phase 3 work are planned for **v0.25.0**.
 
 This fork specifically focuses on **strengthening the MCP layer and ergonomics for AI-agent use** (see [spec/mcp-agent-ergonomics/spec.md](spec/mcp-agent-ergonomics/spec.md)).
 
@@ -41,7 +43,7 @@ This fork specifically redesigns the MCP layer to solve the primary friction poi
 | DOM extraction and lightweight interaction | Draco |
 | Screenshots and browser-only behavior | agent-browser |
 
-### Draco vs agent-browser
+### Draco vs [agent-browser](https://github.com/vercel-labs/agent-browser)
 
 | Area | Draco | agent-browser |
 | :--- | :--- | :--- |
@@ -52,6 +54,20 @@ This fork specifically redesigns the MCP layer to solve the primary friction poi
 | Role | Primary scraper | Browser fallback |
 
 Use Draco first when the task only needs page content, structured data, or DOM interaction. Escalate to agent-browser when the task depends on real layout, screenshots, downloads, or browser-only APIs.
+
+### Measured Performance
+
+Draco v0.23.0 release binary, Linux x86_64 on an AMD Ryzen 5 5600GT. Each flow used a fixed localhost HTML fixture, 2 warm-up calls, then 30 successful sequential samples with response-content validation. These numbers measure local runtime and transport overhead, not internet latency or protected-site success.
+
+| Flow | Latency p50 / p95 | Sequential rate |
+| :--- | :--- | ---: |
+| MCP stdio scrape | 1.33 / 1.69 ms | 724 calls/s |
+| MCP HTTP scrape | 3.79 / 5.02 ms | 267 calls/s |
+| HTTP interact lifecycle | 106.87 / 112.81 ms | 9.32 flows/s |
+
+The interact lifecycle is `open → snapshot → clickRef → scrape → close`, not a single action. Peak process RSS observed during the run was 20.1 MiB for stdio and 63.3 MiB for the daemon. The fixture responses averaged 127 bytes for scrape and 2.2 KiB for the interact snapshot plus final scrape.
+
+`agent-browser` v0.33.2 under Node 24 was excluded from the numeric comparison because repeated `open → snapshot` runs did not produce 30 valid samples in this environment; intermittent snapshots returned `(empty page)`. Failed samples were not counted.
 
 > 🛡️ **Defensive Fallback Strategy:** Draco is designed for ultra-low latency and token efficiency. For heavily protected enterprise sites requiring a real browser, pair Draco with [Microsoft Playwright MCP](https://github.com/microsoft/playwright-mcp) as a high-fidelity rendering fallback, maintaining a strict separation of concerns.
 
@@ -65,7 +81,7 @@ Use Draco first when the task only needs page content, structured data, or DOM i
 
 ### 3. Cutting Token Clutter (Interactive-Only & Promotion)
 * **The Pain:** Injecting reference attributes on every tag in a deep HTML tree bloats the prompt, wastes tokens, and confuses the model.
-* **The Solution:** Draco restricts references to core interactive roles by default. However, it dynamically **promotes** content nodes (like divs/spans) if they detect explicit `onclick` handlers, inline JS clicks, CSS `cursor: pointer` styles, or custom non-negative `tabindex` attributes. You get an ~80% leaner tree with 100% interactability.
+* **The Solution:** Draco restricts references to core interactive roles by default. However, it dynamically **promotes** content nodes (like divs/spans) if they detect explicit `onclick` handlers, inline JS clicks, CSS `cursor: pointer` styles, or custom non-negative `tabindex` attributes. This keeps the tree compact without hiding actionable nodes.
 
 ### 4. Robust Failures & Charset Fidelity (CJK Sniffing)
 * **The Pain:** Missing targets throw raw timeouts, and foreign-charset web pages (CJK: Traditional Chinese, Japanese, Korean) decode as U+FFFD (``) replacement garbage, blinding the LLM.
@@ -159,6 +175,8 @@ draco mcp                        # stdio transport (newline-delimited JSON-RPC)
 * **`draco_interact_open`** / **`close`** / **`exec`** / **`navigate`** / **`scrape`** — Stateful, cookie-aware browser sessions running inside an in-process V8 sandbox.
 * **`draco_interact_snapshot`** — Generates a lightweight semantic accessibility tree snapshot.
 * **`draco_interact_act`** — Dispatches sequential actions (`clickRef`, `typeRef`, etc.) via stable references with built-in self-healing.
+* **`draco_interact_wait_for`** / **`dialogs`** / **`network_requests`** / **`console_messages`** — Waits for DOM conditions and inspects bounded session diagnostics.
+* **`draco_interact_fill_form`** / **`navigate_back`** — Fills multiple controls through existing actions and navigates session history.
 
 ---
 
