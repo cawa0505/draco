@@ -89,6 +89,21 @@
   if (w.location) g.location = w.location;
   if (w.history) g.history = w.history;
 
+  // happy-dom has no modal UI. Preserve synchronous page execution while
+  // recording calls for interact diagnostics.
+  g.alert = (message) => {
+    try { ops.op_raze_dialog("alert", String(message ?? ""), ""); } catch (_) {}
+  };
+  g.confirm = (message) => {
+    try { ops.op_raze_dialog("confirm", String(message ?? ""), ""); } catch (_) {}
+    return true;
+  };
+  g.prompt = (message, defaultValue = "") => {
+    const value = defaultValue == null ? "" : String(defaultValue);
+    try { ops.op_raze_dialog("prompt", String(message ?? ""), value); } catch (_) {}
+    return value;
+  };
+
   // Backfill DOM element constructors that happy-dom does not implement but that
   // frameworks reference as BARE globals in `instanceof` / `typeof` guards. A
   // bare reference to an undefined identifier is a ReferenceError (not

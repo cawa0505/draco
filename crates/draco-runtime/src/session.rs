@@ -62,10 +62,10 @@ use tokio::sync::{mpsc, oneshot};
 use crate::{
     draco_runtime_ext, eval_module, extract_scripts, json_string_literal, normalize_stub_body,
     poll_once, quiesce_tick_ms, resolve_script_url, run_with_execution_deadline, serialize_dom,
-    ApiFetcher, CaptureConfig, CaptureState, ExecutionBoundaryError, ExecutionWatchdog,
-    ExternalScriptPrefetch, HeapLimitExceeded, HeapLimitGuard, MapModuleLoader, ScriptFetcher,
-    SharedSource, TrackedJsRuntime, EXECUTION_DEADLINE_DIAGNOSTIC, EXTERNAL_SCRIPT_PREFETCH_BYTES,
-    GLUE_JS, HEAP_LIMIT_DIAGNOSTIC, RELEASE_INPUTS_JS, SNAPSHOT,
+    ApiFetcher, CaptureConfig, CaptureState, CapturedRequest, ExecutionBoundaryError,
+    ExecutionWatchdog, ExternalScriptPrefetch, HeapLimitExceeded, HeapLimitGuard, MapModuleLoader,
+    ScriptFetcher, SharedSource, TrackedJsRuntime, EXECUTION_DEADLINE_DIAGNOSTIC,
+    EXTERNAL_SCRIPT_PREFETCH_BYTES, GLUE_JS, HEAP_LIMIT_DIAGNOSTIC, RELEASE_INPUTS_JS, SNAPSHOT,
 };
 
 /// Fetch a top-level document for an in-session navigation, cookie-aware.
@@ -214,6 +214,11 @@ enum Command {
         actions: Vec<Action>,
         reply: oneshot::Sender<ActReport>,
     },
+    /// Read bounded network, console, and dialog events accumulated by this
+    /// session, including documents visited before the current one.
+    Diagnostics {
+        reply: oneshot::Sender<SessionDiagnostics>,
+    },
     /// Tear the isolate down and end the thread.
     Close { reply: oneshot::Sender<()> },
 }
@@ -261,17 +266,30 @@ pub enum Action {
     },
     /// Set a `<select>`'s value and dispatch `change`.
     Select { selector: String, value: String },
+    /// Set a checkbox or radio control and dispatch input/change.
+    Check { selector: String, checked: bool },
     /// Hover: pointerover/mouseover/mouseenter/mousemove.
     Hover { selector: String },
     /// Wait until `selector` appears, or a fixed `milliseconds` pause (both
     /// ceilinged by the capture window). `ms` is accepted as an alias for
     /// `milliseconds` (Firecrawl uses the long name; agents habitually send
     /// the short one).
+    ///
+    /// Extended with `text` (wait until element's textContent contains the
+    /// substring) and `visible` (wait until element is visible per computed
+    /// style). Both are ceilinged by the capture window.
     Wait {
         #[serde(default)]
         selector: Option<String>,
         #[serde(default, alias = "ms")]
         milliseconds: Option<u64>,
+        /// Wait until the matched element's textContent contains this substring.
+        #[serde(default)]
+        text: Option<String>,
+        /// Wait until the matched element is visible according to DOM styles
+        /// and aria-hidden state (happy-dom has no layout box geometry).
+        #[serde(default)]
+        visible: Option<bool>,
     },
     /// Click an element via snapshot ref (e.g. "e12").
     ClickRef { r#ref: String },
@@ -288,6 +306,8 @@ pub enum Action {
     ScrollRef { r#ref: String },
     /// Select a value on an element identified by snapshot ref.
     SelectRef { r#ref: String, value: String },
+    /// Set a checkbox or radio control identified by snapshot ref.
+    CheckRef { r#ref: String, checked: bool },
     /// Hover over an element identified by snapshot ref.
     HoverRef { r#ref: String },
     /// Wait for an element identified by snapshot ref to appear.
@@ -321,6 +341,14 @@ pub struct ActReport {
     pub steps: Vec<ActStep>,
     /// Console lines emitted across the batch.
     pub logs: Vec<String>,
+}
+
+/// Bounded diagnostics accumulated across the documents visited by one session.
+#[derive(Debug, Clone, Default)]
+pub struct SessionDiagnostics {
+    pub requests: Vec<CapturedRequest>,
+    pub logs: Vec<String>,
+    pub dialogs: Vec<crate::CapturedDialog>,
 }
 
 /// A live interact session: a `Send` handle to the isolate running on its own
@@ -462,6 +490,14 @@ impl Session {
         rx.await.map_err(|_| SessionError::Closed)
     }
 
+    pub async fn diagnostics(&self) -> Result<SessionDiagnostics, SessionError> {
+        let (reply, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(Command::Diagnostics { reply })
+            .map_err(|_| SessionError::Closed)?;
+        rx.await.map_err(|_| SessionError::Closed)
+    }
+
     /// Tear the isolate down and join the thread. Best-effort: if the thread is
     /// already gone this still resolves.
     pub async fn close(mut self) -> Result<(), SessionError> {
@@ -508,6 +544,7 @@ async fn actor_main(
             return;
         }
     };
+    let mut archived = SessionDiagnostics::default();
 
     // Initial settle: let the freshly-hydrated page's scheduled work land, exactly
     // as the one-shot path's capture window does, before we report ready.
@@ -588,6 +625,10 @@ async fn actor_main(
                                     error: Some(format!("failed to fetch {url}")),
                                 },
                                 Some((final_url, html)) => {
+                                    append_diagnostics(
+                                        &mut archived,
+                                        active.as_ref().unwrap().cap.borrow().diagnostics(),
+                                    );
                                     // Drop the old V8 isolate *before* creating the
                                     // new one.  Two isolates on the same thread cause
                                     // a V8 HandleScope CHECK failure during the old
@@ -644,6 +685,14 @@ async fn actor_main(
                         let snapshot = crate::serialize_a11y_snapshot(&mut current.runtime, &current.cap, &config.capture).await;
                         let _ = reply.send(snapshot);
                     }
+                    Some(Command::Diagnostics { reply }) => {
+                        let mut diagnostics = archived.clone();
+                        append_diagnostics(
+                            &mut diagnostics,
+                            active.as_ref().unwrap().cap.borrow().diagnostics(),
+                        );
+                        let _ = reply.send(diagnostics);
+                    }
                     Some(Command::Close { reply }) => {
                         let _ = reply.send(());
                         break;
@@ -684,6 +733,28 @@ async fn actor_main(
     // `runtime` (and the isolate) drops here — clean teardown.
 }
 
+fn append_diagnostics(target: &mut SessionDiagnostics, mut source: SessionDiagnostics) {
+    const MAX_SESSION_REQUESTS: usize = 256;
+    const MAX_SESSION_LOGS: usize = 256;
+    const MAX_SESSION_DIALOGS: usize = 64;
+    target.requests.append(&mut source.requests);
+    target.logs.append(&mut source.logs);
+    target.dialogs.append(&mut source.dialogs);
+    if target.requests.len() > MAX_SESSION_REQUESTS {
+        target
+            .requests
+            .drain(..target.requests.len() - MAX_SESSION_REQUESTS);
+    }
+    if target.logs.len() > MAX_SESSION_LOGS {
+        target.logs.drain(..target.logs.len() - MAX_SESSION_LOGS);
+    }
+    if target.dialogs.len() > MAX_SESSION_DIALOGS {
+        target
+            .dialogs
+            .drain(..target.dialogs.len() - MAX_SESSION_DIALOGS);
+    }
+}
+
 /// Build the isolate and evaluate the page to the parsing-finished + lifecycle
 /// point, returning the live runtime and shared state so the caller can keep
 /// driving it. Mirrors `run_capture_inner`'s open sequence (see module note);
@@ -714,6 +785,7 @@ async fn hydrate(
         content_activity: Rc::new(Cell::new(0)),
         rendered_html: None,
         logs: Vec::new(),
+        dialogs: Vec::new(),
         exec_result: None,
         a11y_snapshot: None,
         started: Instant::now(),
@@ -1182,13 +1254,19 @@ async fn do_act(
             Action::Wait {
                 selector,
                 milliseconds,
+                text,
+                visible,
             } => {
                 wait_action(
                     runtime,
                     cap,
                     cfg,
-                    selector.as_deref(),
-                    *milliseconds,
+                    (
+                        selector.as_deref(),
+                        *milliseconds,
+                        text.as_deref(),
+                        *visible,
+                    ),
                     heap_guard,
                 )
                 .await
@@ -1263,13 +1341,21 @@ fn action_label(a: &Action) -> String {
                 .unwrap_or("down")
         ),
         Action::Select { selector, .. } => format!("select {selector}"),
+        Action::Check {
+            selector, checked, ..
+        } => format!("set {selector} checked={checked}"),
         Action::Hover { selector } => format!("hover {selector}"),
         Action::Wait {
             selector,
             milliseconds,
-        } => match (selector, milliseconds) {
-            (Some(s), _) => format!("wait {s}"),
-            (None, Some(ms)) => format!("wait {ms}ms"),
+            text,
+            visible,
+        } => match (selector, milliseconds, text, visible) {
+            (Some(s), _, Some(text), _) => format!("wait {s} for text {text:?}"),
+            (Some(s), _, _, Some(true)) => format!("wait {s} visible"),
+            (Some(s), _, _, _) => format!("wait {s}"),
+            (None, _, Some(text), _) => format!("wait for text {text:?}"),
+            (None, Some(ms), _, _) => format!("wait {ms}ms"),
             _ => "wait".to_string(),
         },
         Action::ClickRef { r#ref } => format!("click ref {}", r#ref),
@@ -1277,6 +1363,9 @@ fn action_label(a: &Action) -> String {
         Action::PressRef { r#ref, .. } => format!("press ref {}", r#ref),
         Action::ScrollRef { r#ref } => format!("scroll ref {}", r#ref),
         Action::SelectRef { r#ref, .. } => format!("select ref {}", r#ref),
+        Action::CheckRef { r#ref, checked, .. } => {
+            format!("set ref {} checked={checked}", r#ref)
+        }
         Action::HoverRef { r#ref } => format!("hover ref {}", r#ref),
         Action::WaitRef { r#ref } => format!("wait ref {}", r#ref),
     }
@@ -1322,28 +1411,58 @@ async fn wait_action(
     runtime: &mut JsRuntime,
     cap: &Rc<RefCell<CaptureState>>,
     cfg: &CaptureConfig,
-    selector: Option<&str>,
-    milliseconds: Option<u64>,
+    condition: (Option<&str>, Option<u64>, Option<&str>, Option<bool>),
     heap_guard: &HeapLimitGuard,
 ) -> Result<(), String> {
+    let (selector, milliseconds, text, visible) = condition;
     let tick = Duration::from_millis(30);
-    if let Some(ms) = milliseconds {
-        let ms = ms.min(cfg.capture_window_ms.max(1));
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(ms) {
-            let _ = heap_guard
-                .run(|| poll_once(runtime))
-                .map_err(|_| HEAP_LIMIT_DIAGNOSTIC.to_string())?;
-            tokio::time::sleep(tick).await;
+    if text.is_none() && visible.is_none() {
+        if let Some(ms) = milliseconds {
+            let ms = ms.min(cfg.capture_window_ms.max(1));
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_millis(ms) {
+                let _ = heap_guard
+                    .run(|| poll_once(runtime))
+                    .map_err(|_| HEAP_LIMIT_DIAGNOSTIC.to_string())?;
+                tokio::time::sleep(tick).await;
+            }
+            return Ok(());
         }
-        return Ok(());
     }
-    let sel = match selector {
-        Some(s) => s,
-        None => return Err("wait requires `selector` or `milliseconds` (alias: `ms`)".to_string()),
-    };
-    let check_js = SEL_PRESENT_JS.replace("__SEL__", &json_string_literal(sel));
-    let ceiling = Duration::from_millis(cfg.capture_window_ms);
+    if visible.is_some() && selector.is_none() {
+        return Err("wait with `visible` requires `selector`".to_string());
+    }
+    if selector.is_none() && text.is_none() {
+        return Err(
+            "wait requires `selector`, `text`, or `milliseconds` (alias: `ms`)".to_string(),
+        );
+    }
+    let check_js = WAIT_CONDITION_JS
+        .replace(
+            "__SEL__",
+            &selector
+                .map(json_string_literal)
+                .unwrap_or_else(|| "null".to_string()),
+        )
+        .replace(
+            "__TEXT__",
+            &text
+                .map(json_string_literal)
+                .unwrap_or_else(|| "null".to_string()),
+        )
+        .replace(
+            "__VISIBLE__",
+            match visible {
+                Some(true) => "true",
+                Some(false) => "false",
+                None => "null",
+            },
+        );
+    let ceiling = Duration::from_millis(
+        milliseconds
+            .unwrap_or(cfg.capture_window_ms)
+            .min(cfg.capture_window_ms.max(1)),
+    );
     let start = Instant::now();
     loop {
         let _ = heap_guard
@@ -1360,7 +1479,7 @@ async fn wait_action(
             return Ok(());
         }
         if start.elapsed() >= ceiling {
-            return Err(format!("wait timed out for selector: {sel}"));
+            return Err("wait condition timed out".to_string());
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -1432,6 +1551,9 @@ fn build_action_js(action: &Action) -> String {
         Action::Select { selector, value } => SELECT_JS
             .replace("__SEL__", &json_string_literal(selector))
             .replace("__VALUE__", &json_string_literal(value)),
+        Action::Check { selector, checked } => CHECK_JS
+            .replace("__SEL__", &json_string_literal(selector))
+            .replace("__CHECKED__", if *checked { "true" } else { "false" }),
         Action::Hover { selector } => HOVER_JS.replace("__SEL__", &json_string_literal(selector)),
         // `wait` never reaches here (handled Rust-side in `do_act`).
         Action::Wait { .. } => {
@@ -1463,6 +1585,11 @@ fn build_action_js(action: &Action) -> String {
             .replace("selector not found: ", "ref not found: ")
             .replace("__SEL__", &json_string_literal(r#ref))
             .replace("__VALUE__", &json_string_literal(value)),
+        Action::CheckRef { r#ref, checked } => CHECK_JS
+            .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
+            .replace("selector not found: ", "ref not found: ")
+            .replace("__SEL__", &json_string_literal(r#ref))
+            .replace("__CHECKED__", if *checked { "true" } else { "false" }),
         Action::HoverRef { r#ref } => HOVER_JS
             .replace("document.querySelector(__SEL__)", "__dracoRefEl(__SEL__)")
             .replace("selector not found: ", "ref not found: ")
@@ -1516,12 +1643,31 @@ const SELECT_JS: &str = r#"const el = document.querySelector(__SEL__);
   try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_e) {}
   try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_e) {}"#;
 
+const CHECK_JS: &str = r#"const el = document.querySelector(__SEL__);
+  if (!el) { Deno.core.ops.op_raze_exec_result(JSON.stringify({ ok: false, error: "selector not found: " + __SEL__ })); return; }
+  try { el.checked = __CHECKED__; } catch (_e) {}
+  try { el.dispatchEvent(new Event("input", { bubbles: true })); } catch (_e) {}
+  try { el.dispatchEvent(new Event("change", { bubbles: true })); } catch (_e) {}"#;
+
 const HOVER_JS: &str = r#"const el = document.querySelector(__SEL__);
   if (!el) { Deno.core.ops.op_raze_exec_result(JSON.stringify({ ok: false, error: "selector not found: " + __SEL__ })); return; }
   const mk = (t) => { try { return new MouseEvent(t, { bubbles: true, cancelable: true, composed: true }); } catch (_e) { return new Event(t, { bubbles: true }); } };
   ["pointerover","mouseover","mouseenter","mousemove"].forEach((t) => { try { el.dispatchEvent(mk(t)); } catch (_e) {} });"#;
 
-const SEL_PRESENT_JS: &str = r#"try { Deno.core.ops.op_raze_exec_result(document.querySelector(__SEL__) ? "1" : "0"); } catch (_e) { try { Deno.core.ops.op_raze_exec_result("0"); } catch (_e2) {} }"#;
+const WAIT_CONDITION_JS: &str = r#"try {
+  const el = __SEL__ ? document.querySelector(__SEL__) : (document.body || document.documentElement);
+  let ok = !!el;
+  if (ok && __TEXT__ !== null) ok = String(el.textContent || "").includes(__TEXT__);
+  if (ok && __VISIBLE__ !== null) {
+    let hidden = false;
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+      if ((style && (style.display === "none" || style.visibility === "hidden")) || node.getAttribute("aria-hidden") === "true") { hidden = true; break; }
+    }
+    ok = __VISIBLE__ ? !hidden : hidden;
+  }
+  Deno.core.ops.op_raze_exec_result(ok ? "1" : "0");
+} catch (_e) { try { Deno.core.ops.op_raze_exec_result("0"); } catch (_e2) {} }"#;
 
 /// After an action, pump the event loop until the DOM stops changing for a
 /// stability window — a reactive modal/route render lands with no network, which

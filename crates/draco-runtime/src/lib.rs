@@ -424,6 +424,17 @@ pub struct CapturedRequest {
     pub via: InterceptVia,
 }
 
+/// One synchronous `alert` / `confirm` / `prompt` call observed in the DOM
+/// runtime. happy-dom has no native modal UI, so the glue records the call and
+/// returns browser-compatible defaults (`true` for confirm, the supplied default
+/// for prompt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedDialog {
+    pub kind: String,
+    pub message: String,
+    pub default_value: Option<String>,
+}
+
 /// Terminal report for a capture run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CaptureReport {
@@ -621,6 +632,9 @@ struct CaptureState {
     /// `op_raze_log` (glue) and the Rust-side script-throw sites; bounded by
     /// [`CaptureState::push_log`].
     logs: Vec<String>,
+    /// Dialog calls captured by the interact runtime; bounded by the same small
+    /// diagnostic budget as logs.
+    dialogs: Vec<CapturedDialog>,
     /// Serialized JSON of the most recent interact `exec` turn's completion value,
     /// stashed by `op_raze_exec_result` and drained per turn. Unused by the
     /// one-shot capture path (`run_capture`); it is the devtools-console return
@@ -644,6 +658,14 @@ const MAX_RUNTIME_LOGS: usize = 96;
 const MAX_LOG_CHARS: usize = 1_024;
 
 impl CaptureState {
+    fn diagnostics(&self) -> session::SessionDiagnostics {
+        session::SessionDiagnostics {
+            requests: self.requests.clone(),
+            logs: self.logs.clone(),
+            dialogs: self.dialogs.clone(),
+        }
+    }
+
     fn take_output_buffers(&mut self) -> (Vec<CapturedRequest>, Option<String>, Vec<String>) {
         (
             std::mem::take(&mut self.requests),
@@ -984,6 +1006,26 @@ fn op_raze_log(state: &mut OpState, #[string] line: String) {
     cap.borrow_mut().push_log(&line);
 }
 
+/// Record one DOM-only dialog call. Real modal blocking is intentionally outside
+/// the happy-dom boundary; interact callers can inspect these events afterward.
+#[deno_core::op2(fast)]
+fn op_raze_dialog(
+    state: &mut OpState,
+    #[string] kind: String,
+    #[string] message: String,
+    #[string] default_value: String,
+) {
+    let cap = state.borrow::<Rc<RefCell<CaptureState>>>().clone();
+    let mut cap = cap.borrow_mut();
+    if cap.dialogs.len() < 64 {
+        cap.dialogs.push(CapturedDialog {
+            kind,
+            message: message.chars().take(2_000).collect(),
+            default_value: (!default_value.is_empty()).then_some(default_value),
+        });
+    }
+}
+
 /// Receive the hydrated DOM serialized by the page side
 /// (`document.documentElement.outerHTML`) and stash it in [`CaptureState`] for the
 /// render-then-Markdown escalation. Called once, after the capture window closes.
@@ -1065,6 +1107,7 @@ deno_core::extension!(
         op_raze_dom,
         op_raze_exec_result,
         op_raze_log,
+        op_raze_dialog,
         op_raze_a11y_snapshot,
     ],
     options = { cap: Rc<RefCell<CaptureState>> },
@@ -1523,6 +1566,7 @@ async fn run_capture_inner(
         content_activity: Rc::new(Cell::new(0)),
         rendered_html: None,
         logs: Vec::new(),
+        dialogs: Vec::new(),
         exec_result: None,
         a11y_snapshot: None,
         started: Instant::now(),
@@ -3408,6 +3452,7 @@ mod tests {
             content_activity: Rc::new(Cell::new(0)),
             rendered_html: None,
             logs: Vec::new(),
+            dialogs: Vec::new(),
             exec_result: None,
             a11y_snapshot: None,
             started: Instant::now(),
@@ -3443,6 +3488,7 @@ mod tests {
             content_activity: Rc::new(Cell::new(0)),
             rendered_html: Some("<html>unused on boot failure</html>".to_string()),
             logs: vec!["boot diagnostic".to_string()],
+            dialogs: Vec::new(),
             exec_result: None,
             a11y_snapshot: None,
             started: Instant::now(),
@@ -3474,6 +3520,7 @@ mod tests {
             content_activity: Rc::new(Cell::new(0)),
             rendered_html: None,
             logs: Vec::new(),
+            dialogs: Vec::new(),
             exec_result: None,
             a11y_snapshot: None,
             started: Instant::now(),

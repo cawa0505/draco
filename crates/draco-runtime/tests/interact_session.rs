@@ -16,7 +16,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::null_fetcher;
-use draco_runtime::session::{ExecOptions, PageFetcher, Session, SessionConfig, SessionFetchers};
+use draco_runtime::session::{
+    Action, ExecOptions, PageFetcher, Session, SessionConfig, SessionFetchers,
+};
 use draco_runtime::CaptureConfig;
 
 /// Observe-mode fetchers (no live data, no navigation): the null script fetcher.
@@ -78,6 +80,77 @@ fn test_config(html: &str) -> SessionConfig {
 
 const SMOKE_HTML: &str = "<!doctype html><html><head><title>Interact Smoke</title></head>\
      <body><div id=\"app\">hi</div></body></html>";
+
+#[tokio::test]
+async fn wait_matches_text_and_dom_visibility() {
+    let html = "<!doctype html><html><body>\
+        <div id=\"status\" style=\"display:none\">pending</div>\
+        <script>setTimeout(() => { const el = document.getElementById('status'); \
+        el.textContent = 'ready'; el.style.display = 'block'; }, 40);</script>\
+        </body></html>";
+    let session = Session::open(test_config(html), Box::new(observe_fetchers))
+        .await
+        .expect("session opens");
+
+    let report = session
+        .act(vec![Action::Wait {
+            selector: Some("#status".to_string()),
+            milliseconds: Some(500),
+            text: Some("ready".to_string()),
+            visible: Some(true),
+        }])
+        .await
+        .expect("wait delivered");
+
+    assert!(report.ok, "wait failed: {:?}", report.steps);
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+async fn diagnostics_capture_dialog_console_and_network_events() {
+    let html = "<!doctype html><html><body><script>\
+        console.warn('phase-two-log');\
+        alert('notice');\
+        confirm('continue?');\
+        prompt('name?', 'Ada');\
+        fetch('/api/items');\
+        </script></body></html>";
+    let session = Session::open(test_config(html), Box::new(observe_fetchers))
+        .await
+        .expect("session opens");
+
+    let diagnostics = session.diagnostics().await.expect("diagnostics delivered");
+    assert!(
+        diagnostics
+            .logs
+            .iter()
+            .any(|line| line.contains("phase-two-log")),
+        "console output missing: {:?}",
+        diagnostics.logs
+    );
+    assert!(
+        diagnostics
+            .requests
+            .iter()
+            .any(|request| request.url.ends_with("/api/items")),
+        "network request missing: {:?}",
+        diagnostics.requests
+    );
+    assert_eq!(
+        diagnostics
+            .dialogs
+            .iter()
+            .map(|dialog| (dialog.kind.as_str(), dialog.message.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("alert", "notice"),
+            ("confirm", "continue?"),
+            ("prompt", "name?")
+        ]
+    );
+    assert_eq!(diagnostics.dialogs[2].default_value.as_deref(), Some("Ada"));
+    session.close().await.expect("close");
+}
 
 /// Open → exec (a page-scope DOM mutation) → serialize → close. Proves the
 /// isolate hydrates, holds, runs `exec` in page global scope with the effect

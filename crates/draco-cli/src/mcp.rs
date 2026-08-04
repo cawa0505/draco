@@ -650,6 +650,96 @@ fn interact_tool_descriptors() -> Vec<Value> {
             },
             "annotations": { "readOnlyHint": true, "openWorldHint": false }
         }),
+        json!({
+            "name": "draco_interact_wait_for",
+            "title": "Wait for session condition",
+            "description": "Wait, within the session capture-window ceiling, for a selector, text substring, or DOM visibility state.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sessionId": { "type": "string" },
+                    "selector": { "type": "string" },
+                    "text": { "type": "string" },
+                    "visible": { "type": "boolean" },
+                    "timeoutMs": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["sessionId"]
+            },
+            "annotations": { "readOnlyHint": false, "openWorldHint": true }
+        }),
+        json!({
+            "name": "draco_interact_dialogs",
+            "title": "Inspect session dialogs",
+            "description": "Return bounded alert, confirm, and prompt calls captured in this DOM session. DOM-only confirm returns true and prompt returns its supplied default; no browser modal is created.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "sessionId": { "type": "string" } },
+                "required": ["sessionId"]
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false }
+        }),
+        json!({
+            "name": "draco_interact_network_requests",
+            "title": "Inspect session network requests",
+            "description": "Return bounded fetch/XHR requests accumulated across documents visited in this session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "sessionId": { "type": "string" } },
+                "required": ["sessionId"]
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false }
+        }),
+        json!({
+            "name": "draco_interact_console_messages",
+            "title": "Inspect session console messages",
+            "description": "Return bounded console messages accumulated across documents visited in this session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "sessionId": { "type": "string" } },
+                "required": ["sessionId"]
+            },
+            "annotations": { "readOnlyHint": true, "openWorldHint": false }
+        }),
+        json!({
+            "name": "draco_interact_fill_form",
+            "title": "Fill session form fields",
+            "description": "Fill text, select, checkbox, and radio fields sequentially using a CSS selector or snapshot ref for each field.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "sessionId": { "type": "string" },
+                    "fields": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "selector": { "type": "string" },
+                                "ref": { "type": "string" },
+                                "type": { "type": "string", "enum": ["text", "select", "checkbox", "radio"] },
+                                "value": { "type": "string" },
+                                "checked": { "type": "boolean" }
+                            },
+                            "required": ["type"],
+                            "additionalProperties": false
+                        },
+                        "minItems": 1
+                    }
+                },
+                "required": ["sessionId", "fields"]
+            },
+            "annotations": { "readOnlyHint": false, "openWorldHint": true }
+        }),
+        json!({
+            "name": "draco_interact_navigate_back",
+            "title": "Navigate session back",
+            "description": "Navigate to the previous URL in this session's bounded history stack.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "sessionId": { "type": "string" } },
+                "required": ["sessionId"]
+            },
+            "annotations": { "readOnlyHint": false, "openWorldHint": true }
+        }),
     ]
 }
 
@@ -877,6 +967,109 @@ fn required_interact_arg<'a>(args: &'a Value, key: &str) -> Result<&'a str, (i64
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or((-32602, format!("\"{key}\" (string) is required")))
+}
+
+#[cfg(feature = "tier2")]
+fn optional_interact_arg(args: &Value, key: &str) -> Result<Option<String>, (i64, String)> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .map(Some)
+            .ok_or((-32602, format!("\"{key}\" must be a non-empty string"))),
+    }
+}
+
+#[cfg(feature = "tier2")]
+fn parse_fill_form_actions(args: &Value) -> Result<Vec<draco_core::Action>, (i64, String)> {
+    let fields = args
+        .get("fields")
+        .and_then(Value::as_array)
+        .ok_or((-32602, "\"fields\" (array) is required".to_string()))?;
+    if fields.is_empty() {
+        return Err((-32602, "\"fields\" must not be empty".to_string()));
+    }
+    fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let kind = field
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or((-32602, format!("fields[{index}].type is required")))?;
+            let selector = optional_interact_arg(field, "selector")?;
+            let reference = optional_interact_arg(field, "ref")?;
+            if selector.is_none() && reference.is_none() {
+                return Err((-32602, format!("fields[{index}] requires selector or ref")));
+            }
+            if selector.is_some() && reference.is_some() {
+                return Err((
+                    -32602,
+                    format!("fields[{index}] cannot contain both selector and ref"),
+                ));
+            }
+            let value = || {
+                field
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .ok_or((-32602, format!("fields[{index}].value is required")))
+            };
+            let checked = || {
+                field
+                    .get("checked")
+                    .and_then(Value::as_bool)
+                    .ok_or((-32602, format!("fields[{index}].checked is required")))
+            };
+            match kind {
+                "text" => {
+                    let text = value()?;
+                    if let Some(selector) = selector {
+                        Ok(draco_core::Action::Type {
+                            selector: Some(selector),
+                            text,
+                            clear: true,
+                        })
+                    } else {
+                        Ok(draco_core::Action::TypeRef {
+                            r#ref: reference.unwrap_or_default(),
+                            text,
+                            clear: true,
+                        })
+                    }
+                }
+                "select" => {
+                    let value = value()?;
+                    if let Some(selector) = selector {
+                        Ok(draco_core::Action::Select { selector, value })
+                    } else {
+                        Ok(draco_core::Action::SelectRef {
+                            r#ref: reference.unwrap_or_default(),
+                            value,
+                        })
+                    }
+                }
+                "checkbox" | "radio" => {
+                    let checked = checked()?;
+                    if let Some(selector) = selector {
+                        Ok(draco_core::Action::Check { selector, checked })
+                    } else {
+                        Ok(draco_core::Action::CheckRef {
+                            r#ref: reference.unwrap_or_default(),
+                            checked,
+                        })
+                    }
+                }
+                other => Err((
+                    -32602,
+                    format!("fields[{index}].type unsupported: {other:?}"),
+                )),
+            }
+        })
+        .collect()
 }
 
 /// Cap on pages per `draco_crawl` / `draco_batch_scrape` call. Tool calls are
@@ -1251,6 +1444,111 @@ async fn call_interact(
                 "error": report.error,
             })
         }
+        "draco_interact_navigate_back" => {
+            let id = required_interact_arg(&args, "sessionId")?;
+            let report = match store.navigate_back(id).await {
+                Ok(report) => report,
+                Err(error) => return Ok(interact_store_error(error)),
+            };
+            json!({
+                "success": report.ok,
+                "url": report.url,
+                "error": report.error,
+            })
+        }
+        "draco_interact_wait_for" => {
+            let id = required_interact_arg(&args, "sessionId")?;
+            let selector = optional_interact_arg(&args, "selector")?;
+            let text = optional_interact_arg(&args, "text")?;
+            let visible = args.get("visible").and_then(Value::as_bool);
+            let timeout = args.get("timeoutMs").and_then(Value::as_u64);
+            if selector.is_none() && text.is_none() && timeout.is_none() {
+                return Err((
+                    -32602,
+                    "wait_for requires \"selector\", \"text\", or \"timeoutMs\"".to_string(),
+                ));
+            }
+            if visible.is_some() && selector.is_none() {
+                return Err((
+                    -32602,
+                    "wait_for with \"visible\" requires \"selector\"".to_string(),
+                ));
+            }
+            let report = match store
+                .act(
+                    id,
+                    vec![draco_core::Action::Wait {
+                        selector,
+                        milliseconds: timeout,
+                        text,
+                        visible,
+                    }],
+                )
+                .await
+            {
+                Ok(report) => report,
+                Err(error) => return Ok(interact_store_error(error)),
+            };
+            let step = report.steps.into_iter().next();
+            json!({
+                "success": report.ok,
+                "step": step.map(|step| json!({
+                    "action": step.action,
+                    "ok": step.ok,
+                    "error": step.error,
+                    "code": step.code,
+                    "hint": step.hint,
+                })),
+            })
+        }
+        "draco_interact_fill_form" => {
+            let id = required_interact_arg(&args, "sessionId")?;
+            let actions = parse_fill_form_actions(&args)?;
+            let report = match store.act(id, actions).await {
+                Ok(report) => report,
+                Err(error) => return Ok(interact_store_error(error)),
+            };
+            json!({
+                "success": report.ok,
+                "steps": report.steps.into_iter().map(|step| json!({
+                    "action": step.action,
+                    "ok": step.ok,
+                    "error": step.error,
+                    "code": step.code,
+                    "hint": step.hint,
+                })).collect::<Vec<_>>(),
+            })
+        }
+        "draco_interact_dialogs"
+        | "draco_interact_network_requests"
+        | "draco_interact_console_messages" => {
+            let id = required_interact_arg(&args, "sessionId")?;
+            let diagnostics = match store.diagnostics(id).await {
+                Ok(diagnostics) => diagnostics,
+                Err(error) => return Ok(interact_store_error(error)),
+            };
+            match name {
+                "draco_interact_dialogs" => json!({
+                    "success": true,
+                    "dialogs": diagnostics.dialogs.into_iter().map(|dialog| json!({
+                        "type": dialog.kind,
+                        "message": dialog.message,
+                        "defaultValue": dialog.default_value,
+                    })).collect::<Vec<_>>(),
+                }),
+                "draco_interact_network_requests" => json!({
+                    "success": true,
+                    "requests": diagnostics.requests.into_iter().map(|request| json!({
+                        "method": request.method,
+                        "url": request.url,
+                        "headers": request.headers,
+                        "body": request.body.map(|body| String::from_utf8_lossy(&body).into_owned()),
+                        "via": request.via,
+                    })).collect::<Vec<_>>(),
+                }),
+                _ => json!({ "success": true, "messages": diagnostics.logs }),
+            }
+        }
         "draco_interact_scrape" => {
             let id = required_interact_arg(&args, "sessionId")?;
             let formats: Vec<String> = args
@@ -1561,11 +1859,51 @@ mod tests {
             "draco_interact_act",
             "draco_interact_snapshot",
             "draco_interact_navigate",
+            "draco_interact_navigate_back",
+            "draco_interact_wait_for",
+            "draco_interact_dialogs",
+            "draco_interact_network_requests",
+            "draco_interact_console_messages",
+            "draco_interact_fill_form",
             "draco_interact_scrape",
             "draco_interact_close",
         ] {
             assert!(names.contains(&name), "missing {name}: {names:?}");
         }
+    }
+
+    #[cfg(feature = "tier2")]
+    #[test]
+    fn fill_form_fields_map_to_existing_actions() {
+        let actions = parse_fill_form_actions(&json!({
+            "fields": [
+                { "type": "text", "selector": "#name", "value": "Ada" },
+                { "type": "select", "ref": "e2", "value": "tw" },
+                { "type": "checkbox", "selector": "#terms", "checked": true }
+            ]
+        }))
+        .expect("valid form");
+        assert!(matches!(
+            &actions[0],
+            draco_core::Action::Type { selector: Some(selector), text, clear }
+                if selector == "#name" && text == "Ada" && *clear
+        ));
+        assert!(matches!(
+            &actions[1],
+            draco_core::Action::SelectRef { r#ref, value }
+                if r#ref == "e2" && value == "tw"
+        ));
+        assert!(matches!(
+            &actions[2],
+            draco_core::Action::Check { selector, checked }
+                if selector == "#terms" && *checked
+        ));
+
+        let error = parse_fill_form_actions(&json!({
+            "fields": [{ "type": "text", "value": "missing target" }]
+        }))
+        .expect_err("target is required");
+        assert_eq!(error.0, -32602);
     }
 
     // ---- protocol errors ----------------------------------------------------

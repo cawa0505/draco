@@ -14,7 +14,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use draco_core::{
     ActReport, Action, Config, ExecOptions, ExecReport, ExtractionResult, FormatSet, NavReport,
-    Session,
+    Session, SessionDiagnostics,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -36,6 +36,7 @@ struct SessionEntry {
     last_activity: Instant,
     created_at: Instant,
     url: String,
+    history: Vec<String>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -179,6 +180,7 @@ impl SessionStore {
                 last_activity: now,
                 created_at: now,
                 url: url.to_string(),
+                history: Vec::new(),
                 _permit: permit,
             },
         );
@@ -208,7 +210,7 @@ impl SessionStore {
         id: &str,
         url: String,
     ) -> Result<NavReport, SessionStoreError> {
-        let (handle, _) = self.acquire(id)?;
+        let (handle, previous_url) = self.acquire(id)?;
         let guard = handle.lock().await;
         let report = guard
             .as_ref()
@@ -221,10 +223,69 @@ impl SessionStore {
         if let Some(entry) = sessions.get_mut(id) {
             entry.last_activity = Instant::now();
             if let Some(url) = report.url.as_ref() {
+                if *url != entry.url {
+                    entry.history.push(previous_url);
+                    if entry.history.len() > 64 {
+                        entry.history.remove(0);
+                    }
+                }
                 entry.url = url.clone();
             }
         }
         Ok(report)
+    }
+
+    pub(crate) async fn navigate_back(&self, id: &str) -> Result<NavReport, SessionStoreError> {
+        let (handle, target) = {
+            let mut sessions = self.lock_sessions();
+            let entry = sessions.get_mut(id).ok_or(SessionStoreError::NotFound)?;
+            entry.last_activity = Instant::now();
+            let target = entry.history.pop().ok_or_else(|| {
+                SessionStoreError::Runtime("navigation history is empty".to_string())
+            })?;
+            (entry.session.clone(), target)
+        };
+        let guard = handle.lock().await;
+        let report = match guard.as_ref() {
+            Some(session) => session
+                .navigate(target.clone())
+                .await
+                .map_err(|e| SessionStoreError::Runtime(e.to_string())),
+            None => Err(SessionStoreError::Closed),
+        };
+        drop(guard);
+        let mut sessions = self.lock_sessions();
+        if let Some(entry) = sessions.get_mut(id) {
+            entry.last_activity = Instant::now();
+            match &report {
+                Ok(report) => {
+                    if let Some(url) = report.url.as_ref() {
+                        entry.url = url.clone();
+                    } else {
+                        entry.history.push(target);
+                    }
+                }
+                Err(_) => entry.history.push(target),
+            }
+        }
+        report
+    }
+
+    pub(crate) async fn diagnostics(
+        &self,
+        id: &str,
+    ) -> Result<SessionDiagnostics, SessionStoreError> {
+        let (handle, _) = self.acquire(id)?;
+        let guard = handle.lock().await;
+        let diagnostics = guard
+            .as_ref()
+            .ok_or(SessionStoreError::Closed)?
+            .diagnostics()
+            .await
+            .map_err(|e| SessionStoreError::Runtime(e.to_string()))?;
+        drop(guard);
+        self.touch(id);
+        Ok(diagnostics)
     }
 
     pub(crate) async fn act(

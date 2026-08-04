@@ -126,8 +126,10 @@ pub fn content_type_of(headers: &[(String, String)]) -> &str {
 pub use challenge::{detect_challenge, ChallengeKind};
 #[cfg(feature = "tier2")]
 pub use draco_runtime::session::{
-    ActReport, ActStep, Action, ExecOptions, ExecReport, NavReport, Session,
+    ActReport, ActStep, Action, ExecOptions, ExecReport, NavReport, Session, SessionDiagnostics,
 };
+#[cfg(feature = "tier2")]
+pub use draco_runtime::{CapturedDialog, CapturedRequest};
 pub use draco_static::extract_schema::extract_with_schema;
 pub use fetcher::{NetFetcher, PageFetcher};
 #[cfg(feature = "tier2")]

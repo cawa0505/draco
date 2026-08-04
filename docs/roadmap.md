@@ -118,20 +118,17 @@ session、`Mcp-Session-Id` 與 `Accept` 語意。完成前，local stdio 仍是�
 已完成內容見版本演進。保留一項尚未決定的延伸：是否讓靜態 scrape path 也輸出
 accessibility format；目前 interact live DOM 是唯一正式 snapshot path。
 
-### Phase 2 — Session 工具補齊（未完成）
+### Phase 2 — Session 工具補齊（已實作，未發布）
 
-以下項目尚未交付，不能以 v0.22.0 的 session/ref 實作代替：
+已完成 text-match / DOM-visible `wait_for`、session 累積的 network / console
+viewer、`fill_form` batch sugar，以及 bounded history stack 的 `navigate_back`。
+`alert` / `confirm` / `prompt` 會在 DOM runtime 中攔截並累積供 session viewer
+讀取；happy-dom 沒有真實 modal UI，因此 `confirm` 回傳 `true`，`prompt` 回傳
+呼叫端提供的預設值。真實 blocking dialog 行為仍屬 Phase 4 browser escalation。
 
-- text-match / visible `wait_for`。
-- dialog interception（alert / confirm / prompt）。
-- session 累積的 network request viewer。
-- session 累積的 console message viewer。
-- `fill_form` batch sugar。
-- `navigate_back` 與 history stack。
-
-**驗證 gate：**同一 session 完成 navigate、snapshot、act、fill、wait，並能讀取
-該 session 的 network / console / dialog 結果；每個工具都要有 bounded timeout
-與明確 failure code。
+**驗證 gate：**同一 session 可完成 navigate、snapshot、act、fill、wait，並讀取
+累積的 network / console / dialog 結果；MCP descriptors、嚴格 `fill_form` 轉換與
+runtime diagnostics 均有 focused tests。
 
 ### Phase 3 — Multi-tab（未完成）
 
