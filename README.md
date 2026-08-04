@@ -65,7 +65,9 @@ This fork specifically redesigns the MCP layer to solve the primary friction poi
   - The fetch pipeline integrates **WHATWG encoding sniffing** (BOM → Content-Type → HTML Meta prescan → UTF-8 fallback) so CJK pages render flawlessly.
 
 ### 5. Adaptive Anti-Blocking Engine (Stealth Proxy & Jitter)
-* **The Pain:** Scraping high-intensity commerce or protection-heavy sites (like Shopee or momo) triggers 429 Rate Limiting or 403 blocks instantly on cloud/datacenter IPs.
+**Status: implemented in v0.23.0.**
+
+* **The Pain:** Scraping rate-limited or WAF-protected sites can trigger 429 rate limiting or 403 blocks on cloud/datacenter IPs.
 * **The Solution:**
   - **Header Emulation**: Automated generation of Desktop Chrome or Mobile Safari user-agents, alongside matching `Sec-Ch-Ua`, Platform, and Mobile flags.
   - **Humanized Jitter Delay**: Configurable random delay interval `[min, max]` per-domain, eliminating fixed request cycles.
@@ -99,9 +101,9 @@ endpoints = [
     "http://127.0.0.1:8888"
 ]
 
-[domains."momoshop.com.tw"]
-jitter_ms = [2000, 4500]                 # Custom random delay for momo
-proxy_mode = "always_rotate"             # Always rotate proxy for momo
+[domains."example.com"]
+jitter_ms = [2000, 4500]                 # Domain-specific random delay
+proxy_mode = "always_rotate"             # Rotate on every request for this domain
 ```
 
 ---

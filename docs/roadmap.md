@@ -90,9 +90,9 @@ session 持 page map `{id → isolate document}`，切換換 active document。�
 努力：1–2 天。低優先，parity 補齊非痛點。
 Gate：雙 tab 獨立 JS 狀態、切換後 serialize 正確。
 
-## Phase 4 — Stealth Mode & Anti-Blocking (抗封鎖自適應引擎，v0.23.0 [實作中])
+## Phase 4 — Stealth Mode & Anti-Blocking (抗封鎖自適應引擎，v0.23.0 [已實作])
 
-針對高防爬電商網站（如 momo）與 WAF 的 429/403，實作底層自動防護：
+針對嚴格限流網站與 WAF 的 429/403，實作底層自動防護：
 - **Header Emulation**: Desktop Chrome 與 Mobile Safari User-Agent 隨機切換、自動生成匹配之 Sec-Ch-Ua 指紋、Platform 及 Mobile 指標。
 - **Humanized Jitter Delay**: Domain 等級自適應隨機抖動延遲，拒絕固定週期特徵。
 - **Transparent Proxy Rotation**: 支援 SOCKS5/HTTP 代理池（含 Residential Proxy 與 Tor/Local ADB 輪換）。被封時 Rust 底層自動輪換，對上層 MCP 零感。
@@ -109,4 +109,4 @@ Gate：雙 tab 獨立 JS 狀態、切換後 serialize 正確。
 
 - 完整 Playwright API 相容（`exec` 已對等 `run_code_unsafe`，其餘不追）
 - ax 本身（Draco 已 superset；`scrape_web` 契約直接由 `draco_scrape` 承接）
-- 真實瀏覽器 fingerprint / anti-bot（安全模型設計邊界，非缺口）
+- 真實瀏覽器 fingerprint / anti-bot（需要真實瀏覽器的部分仍維持 out of scope；Stealth HTTP pipeline 已獨立實作）
