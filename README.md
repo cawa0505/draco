@@ -33,16 +33,25 @@ While traditional scrapers output raw markdown or require heavy headless browser
 
 This fork specifically redesigns the MCP layer to solve the primary friction points of AI-driven automation:
 
-### Draco vs Traditional Scrapers & Headless Browsers
+### Choose by Workload
 
-| Feature / Metric | Traditional Scraper (Raw HTML) | Playwright / Headless Chrome | Draco MCP (A11y Snapshot) |
-| :--- | :--- | :--- | :--- |
-| **Data Payload Size** | Large (raw DOM text/attributes bloat) | Massive (image binary / complex JSON) | **Ultra-dehydrated (~80% leaner)** |
-| **Token Consumption** | High (bloated prompt footprint) | Critical (image-to-text / raw DOM) | **Low (interactive-only tree + promotion)** |
-| **DOM Re-render Resilience** | None (CSS selectors break on React updates) | Fragile (must recalculate selectors manually) | **Self-healing (auto-binds via role-name-nth)** |
-| **Cold Boot Overhead** | Low (static fetch) | High (spawn Node driver + browser process) | **0ms (In-process V8 Sandboxed Isolate)** |
-| **Anti-bot Bypass** | Weak (easily blocked TLS/JA4 fingerprint) | Strong (but requires heavy proxy-rotation) | **Strong (custom JA4 TLS fingerprinting)** |
-| **Failures / Debugging** | Unstructured (raw timeout / empty array) | Unstructured (selector timeout) | **Self-describing (`REF_NOT_FOUND` + a11y hint)** |
+| Workload | Use |
+| :--- | :--- |
+| Static pages and direct APIs | Traditional scraper |
+| DOM extraction and lightweight interaction | Draco |
+| Screenshots and browser-only behavior | agent-browser |
+
+### Draco vs agent-browser
+
+| Area | Draco | agent-browser |
+| :--- | :--- | :--- |
+| Runtime | In-process DOM + V8 | Chromium |
+| Targeting | Self-healing a11y refs | Browser refs |
+| Layout and screenshots | No | Yes |
+| Rate limits | Jitter, retry, proxy rotation | Browser/proxy setup |
+| Role | Primary scraper | Browser fallback |
+
+Use Draco first when the task only needs page content, structured data, or DOM interaction. Escalate to agent-browser when the task depends on real layout, screenshots, downloads, or browser-only APIs.
 
 > 🛡️ **Defensive Fallback Strategy:** Draco is designed for ultra-low latency and token efficiency. For heavily protected enterprise sites utilizing advanced JS challenges (Cloudflare Turnstile, DataDome), we recommend pairing Draco with a headless container instance like `playwright-mcp` (e.g. running on `:3015`) as a high-fidelity rendering fallback, maintaining a strict separation of concerns.
 
