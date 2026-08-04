@@ -43,6 +43,238 @@ pub enum SourceTier {
     RuntimeInterception,
 }
 
+/// Stealth configuration for anti-detection and rate-limit mitigation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StealthConfig {
+    /// Enable stealth features (headers, jitter, proxy rotation).
+    pub enabled: bool,
+    /// Jitter delay range in milliseconds (min, max).
+    pub jitter_range: (u64, u64),
+    /// List of proxy endpoints (SOCKS5/HTTP formats).
+    pub proxies: Vec<String>,
+    /// Maximum retry attempts for 429/403.
+    pub max_retries: usize,
+    /// User agent mode (desktop_chrome_random, mobile_safari, custom).
+    #[serde(default)]
+    pub user_agent_mode: String,
+    /// Automatic referer emulation based on target URL.
+    #[serde(default)]
+    pub referer_emulation: bool,
+    /// Automatic Sec-Ch-Ua header generation.
+    #[serde(default)]
+    pub sec_ch_ua_auto: bool,
+    /// Domain-specific stealth overrides.
+    #[serde(default)]
+    pub domains: std::collections::HashMap<String, StealthDomainConfig>,
+}
+
+/// Domain-specific stealth configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StealthDomainConfig {
+    /// Override jitter range for this domain.
+    #[serde(default)]
+    pub jitter_range: Option<(u64, u64)>,
+    /// Proxy rotation mode for this domain.
+    #[serde(default)]
+    pub proxy_mode: ProxyMode,
+    /// Max retry attempts for this domain.
+    #[serde(default)]
+    pub max_retries: Option<usize>,
+}
+
+/// Proxy rotation mode.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyMode {
+    /// Rotate proxy only when blocked (429/403).
+    RotateOnBlocked,
+    /// Rotate proxy on every request.
+    AlwaysRotate,
+}
+
+impl Default for ProxyMode {
+    fn default() -> Self {
+        ProxyMode::RotateOnBlocked
+    }
+}
+
+/// TOML-compatible root structure for `draco.toml` parsing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct DracoToml {
+    /// Stealth configurations.
+    #[serde(default)]
+    pub stealth: TomlStealth,
+    /// Proxy configuration.
+    #[serde(default)]
+    pub proxy: TomlProxy,
+    /// Domain-specific overrides.
+    #[serde(default)]
+    pub domains: std::collections::HashMap<String, TomlDomain>,
+}
+
+/// TOML stealth config segment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TomlStealth {
+    /// Enable stealth features.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// User agent emulation mode.
+    #[serde(default = "default_user_agent_mode")]
+    pub user_agent_mode: String,
+    /// Jitter delay range in ms [min, max].
+    #[serde(default = "default_jitter_range")]
+    pub default_jitter_ms: (u64, u64),
+    /// Headers configuration.
+    #[serde(default)]
+    pub headers: TomlHeaders,
+}
+
+impl Default for TomlStealth {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            user_agent_mode: default_user_agent_mode(),
+            default_jitter_ms: default_jitter_range(),
+            headers: TomlHeaders::default(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_user_agent_mode() -> String {
+    "desktop_chrome_random".to_string()
+}
+
+fn default_jitter_range() -> (u64, u64) {
+    (800, 2500)
+}
+
+/// TOML headers configuration segment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TomlHeaders {
+    /// Automatic Referer generation.
+    #[serde(default = "default_true")]
+    pub referer_emulation: bool,
+    /// Automatic Sec-Ch-Ua generation.
+    #[serde(default = "default_true")]
+    pub sec_ch_ua_auto: bool,
+}
+
+impl Default for TomlHeaders {
+    fn default() -> Self {
+        Self {
+            referer_emulation: true,
+            sec_ch_ua_auto: true,
+        }
+    }
+}
+
+/// TOML proxy configuration segment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TomlProxy {
+    /// Enable proxying.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Proxy rotation mode.
+    #[serde(default = "default_proxy_mode")]
+    pub mode: ProxyMode,
+    /// Maximum retries.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: usize,
+    /// Proxy endpoints list.
+    #[serde(default)]
+    pub endpoints: Vec<String>,
+}
+
+impl Default for TomlProxy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: default_proxy_mode(),
+            max_retries: default_max_retries(),
+            endpoints: Vec::new(),
+        }
+    }
+}
+
+fn default_proxy_mode() -> ProxyMode {
+    ProxyMode::RotateOnBlocked
+}
+
+fn default_max_retries() -> usize {
+    3
+}
+
+/// TOML domain configuration segment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct TomlDomain {
+    /// Override jitter range.
+    #[serde(default)]
+    pub jitter_ms: Option<(u64, u64)>,
+    /// Override proxy mode.
+    #[serde(default)]
+    pub proxy_mode: Option<ProxyMode>,
+    /// Override max retries.
+    #[serde(default)]
+    pub max_retries: Option<usize>,
+}
+
+impl DracoToml {
+    /// Try loading `draco.toml` from the current directory, or from user's `.config/draco/draco.toml`.
+    pub fn load() -> Option<Self> {
+        if let Ok(content) = std::fs::read_to_string("draco.toml") {
+            if let Ok(toml) = toml::from_str::<DracoToml>(&content) {
+                return Some(toml);
+            }
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            let path = std::path::Path::new(&home)
+                .join(".config")
+                .join("draco")
+                .join("draco.toml");
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if let Ok(toml) = toml::from_str::<DracoToml>(&content) {
+                    return Some(toml);
+                }
+            }
+        }
+        None
+    }
+
+    /// Convert parsed TOML configuration to `StealthConfig`.
+    pub fn to_stealth_config(&self) -> StealthConfig {
+        let mut domains = std::collections::HashMap::new();
+        for (domain, d) in &self.domains {
+            domains.insert(
+                domain.clone(),
+                StealthDomainConfig {
+                    jitter_range: d.jitter_ms,
+                    proxy_mode: d.proxy_mode.clone().unwrap_or(self.proxy.mode.clone()),
+                    max_retries: d.max_retries,
+                },
+            );
+        }
+
+        StealthConfig {
+            enabled: self.stealth.enabled,
+            jitter_range: self.stealth.default_jitter_ms,
+            proxies: if self.proxy.enabled {
+                self.proxy.endpoints.clone()
+            } else {
+                Vec::new()
+            },
+            max_retries: self.proxy.max_retries,
+            user_agent_mode: self.stealth.user_agent_mode.clone(),
+            referer_emulation: self.stealth.headers.referer_emulation,
+            sec_ch_ua_auto: self.stealth.headers.sec_ch_ua_auto,
+            domains,
+        }
+    }
+}
+
 /// Millisecond timing breakdown.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Timing {

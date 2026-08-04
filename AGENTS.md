@@ -52,6 +52,10 @@ Deliberate divergences from upstream (keep when merging):
 - `cargo test --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 
+**嚴格編譯規範 (警告零容忍)**:
+- 編譯與檢查時（如 `cargo check / build / clippy`），必須徹底排除所有編譯 Warning。
+- 不可留有未使用的變數、未使用的 dead code、未使用的函數、無效的 import 或是未使用的常數。若重構後產生 dead code，必須立即乾淨地刪除或進行適當標記。
+
 After a source build, restart the systemd user service so the new binary is
 active immediately: `systemctl --user restart draco.service` (binary at
 `~/.draco/bin/draco`, service file `deploy/systemd/draco.service`).
@@ -66,3 +70,12 @@ active immediately: `systemctl --user restart draco.service` (binary at
   complement until Phase 4.
 - install.sh downloads from `cawa0505/draco/releases/latest`; `--from-source`
   builds the repo and installs to `~/.draco/bin`.
+
+## Feature Specifics
+
+### v0.23.0: Stealth Proxy & Adaptive Rate Limit Engine
+- **Header Emulation**: Desktop Chrome & Mobile Safari UA randomized selection + matching Sec-Ch-Ua generation.
+- **Jitter Delay**: Configurable random delay interval [min, max] matching the domain configuration.
+- **Proxy Rotation**: Transparent HTTP/SOCKS5 proxy rotation with exponential backoff on 429/403 or network failures.
+- **TOML Configuration**: Core system reads `draco.toml` from cwd or `~/.config/draco/draco.toml`.
+

@@ -146,6 +146,7 @@ impl StaticEngine for ProdStatic {
 /// Project the orchestration [`Config`] onto the network layer's per-session
 /// options. Extracted (and tested) so the mapping is explicit.
 pub fn session_opts(config: &Config) -> SessionOpts {
+    let stealth = draco_types::DracoToml::load().map(|toml| toml.to_stealth_config());
     SessionOpts {
         proxy: config.proxy.clone(),
         delay_ms: config.delay_ms,
@@ -155,6 +156,7 @@ pub fn session_opts(config: &Config) -> SessionOpts {
         // Filled in per run by `run_ladder` so one operation's page fetch,
         // subresources, and replay share a cookie jar (see `SharedCookieJar`).
         cookie_jar: None,
+        stealth,
     }
 }
 

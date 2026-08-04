@@ -9,6 +9,7 @@ description = "Stealth TLS/JA4 HTTP client for Draco."
 draco-types = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 
 # Browser-faithful TLS/JA4 + HTTP/2 fingerprinting client (BoringSSL-backed).
 #   - `cookies`  : per-session cookie jar (`cookie_provider` / `Jar`).

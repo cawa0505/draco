@@ -64,6 +64,46 @@ This fork specifically redesigns the MCP layer to solve the primary friction poi
   - Failures are **self-describing** (`REF_NOT_FOUND` errors return the most recent A11y Snapshot as a dynamic `hint` to prompt immediate agent self-healing).
   - The fetch pipeline integrates **WHATWG encoding sniffing** (BOM → Content-Type → HTML Meta prescan → UTF-8 fallback) so CJK pages render flawlessly.
 
+### 5. Adaptive Anti-Blocking Engine (Stealth Proxy & Jitter)
+* **The Pain:** Scraping high-intensity commerce or protection-heavy sites (like Shopee or momo) triggers 429 Rate Limiting or 403 blocks instantly on cloud/datacenter IPs.
+* **The Solution:**
+  - **Header Emulation**: Automated generation of Desktop Chrome or Mobile Safari user-agents, alongside matching `Sec-Ch-Ua`, Platform, and Mobile flags.
+  - **Humanized Jitter Delay**: Configurable random delay interval `[min, max]` per-domain, eliminating fixed request cycles.
+  - **Transparent Proxy Rotation**: SOCKS5/HTTP proxy list support with automatic, transparent in-pipeline rotation and exponential backoff upon 429/403 blockages, fully invisible to the calling MCP agent.
+
+
+---
+
+## Configuration (`draco.toml`)
+
+Draco reads `draco.toml` from the current working directory or `~/.config/draco/draco.toml` to configure stealth proxies, UA emulation, and domain-specific delays:
+
+```toml
+[stealth]
+enabled = true
+user_agent_mode = "desktop_chrome_random" # "desktop_chrome_random" | "mobile_safari" | "custom"
+default_jitter_ms = [800, 2500]           # Random jitter interval [min, max]
+
+[stealth.headers]
+referer_emulation = true                 # Generate referrer based on target URL
+sec_ch_ua_auto = true                     # Auto-generate matching Sec-Ch-Ua header
+
+[proxy]
+enabled = true
+mode = "rotate_on_blocked"               # "rotate_on_blocked" (rotate upon 429/403) | "always_rotate"
+max_retries = 3
+
+# Proxy list (supports HTTP, HTTPS, SOCKS5)
+endpoints = [
+    "socks5://127.0.0.1:9050",
+    "http://127.0.0.1:8888"
+]
+
+[domains."momoshop.com.tw"]
+jitter_ms = [2000, 4500]                 # Custom random delay for momo
+proxy_mode = "always_rotate"             # Always rotate proxy for momo
+```
+
 ---
 
 ## MCP Server Configuration (`draco mcp` / `POST /mcp`)

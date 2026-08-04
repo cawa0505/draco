@@ -128,6 +128,8 @@ pub struct SessionOpts {
     /// scrape/discover/crawl/`interact` job). `None` → a throwaway per-call jar,
     /// for a genuinely one-shot fetch with no follow-ups.
     pub cookie_jar: Option<SharedCookieJar>,
+    /// Stealth configuration for anti-detection and rate-limit mitigation.
+    pub stealth: Option<draco_types::StealthConfig>,
 }
 
 impl Default for SessionOpts {
@@ -139,22 +141,226 @@ impl Default for SessionOpts {
             timeout_ms: 30_000,
             headers: Vec::new(),
             cookie_jar: None,
+            stealth: None,
         }
     }
 }
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use draco_types::ProxyMode;
+
+static CURRENT_PROXY_INDEX: AtomicUsize = AtomicUsize::new(0);
+
+const DESKTOP_CHROME_UAS: &[&str] = &[
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+];
+
+const MOBILE_SAFARI_UAS: &[&str] = &[
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPad; CPU OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+];
+
+fn resolve_stealth_for_url(url_str: &str, opts: &SessionOpts) -> Option<(u64, u64, ProxyMode, usize)> {
+    let stealth = opts.stealth.as_ref()?;
+    if !stealth.enabled {
+        return None;
+    }
+    let host = host_of(url_str).unwrap_or_default();
+    
+    let mut jitter = stealth.jitter_range;
+    let mut p_mode = ProxyMode::RotateOnBlocked;
+    let mut retries = stealth.max_retries;
+
+    let matched_domain = stealth.domains.iter().find(|(k, _)| {
+        host == **k || host.ends_with(&format!(".{}", k))
+    });
+
+    if let Some((_, domain_cfg)) = matched_domain {
+        if let Some(j) = domain_cfg.jitter_range {
+            jitter = j;
+        }
+        p_mode = domain_cfg.proxy_mode.clone();
+        if let Some(r) = domain_cfg.max_retries {
+            retries = r;
+        }
+    }
+    
+    Some((jitter.0, jitter.1, p_mode, retries))
+}
+
+fn get_emulated_referer(target_url: &str) -> Option<String> {
+    if let Ok(parsed) = url::Url::parse(target_url) {
+        if let Some(host) = parsed.host_str() {
+            let scheme = parsed.scheme();
+            return Some(format!("{}://{}/", scheme, host));
+        }
+    }
+    None
+}
+
+fn dress_stealth(
+    rb: wreq::RequestBuilder,
+    jar: &Arc<Jar>,
+    opts: &SessionOpts,
+    url_str: &str,
+) -> wreq::RequestBuilder {
+    let mut rb = dress(rb, jar, opts);
+    
+    if let Some(stealth) = &opts.stealth {
+        if stealth.enabled {
+            let mut selected_ua = None;
+            if stealth.user_agent_mode == "desktop_chrome_random" {
+                let idx = rand::random::<usize>() % DESKTOP_CHROME_UAS.len();
+                selected_ua = Some(DESKTOP_CHROME_UAS[idx]);
+            } else if stealth.user_agent_mode == "mobile_safari" {
+                let idx = rand::random::<usize>() % MOBILE_SAFARI_UAS.len();
+                selected_ua = Some(MOBILE_SAFARI_UAS[idx]);
+            }
+
+            if let Some(ua) = selected_ua {
+                rb = rb.header("user-agent", ua);
+                
+                if stealth.sec_ch_ua_auto {
+                    let is_mobile = stealth.user_agent_mode == "mobile_safari";
+                    let platform = if is_mobile {
+                        "\"iOS\""
+                    } else if ua.contains("Windows") {
+                        "\"Windows\""
+                    } else if ua.contains("Macintosh") {
+                        "\"macOS\""
+                    } else {
+                        "\"Linux\""
+                    };
+
+                    let version = if ua.contains("Chrome/127") {
+                        "127"
+                    } else if ua.contains("Chrome/126") {
+                        "126"
+                    } else {
+                        "137"
+                    };
+
+                    rb = rb.header("sec-ch-ua", format!("\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{}\", \"Chromium\";v=\"{}\"", version, version));
+                    rb = rb.header("sec-ch-ua-mobile", if is_mobile { "?1" } else { "?0" });
+                    rb = rb.header("sec-ch-ua-platform", platform);
+                }
+            }
+
+            if stealth.referer_emulation {
+                if let Some(referer) = get_emulated_referer(url_str) {
+                    rb = rb.header("referer", referer);
+                }
+            }
+        }
+    }
+    
+    rb
+}
+
 /// Tier 0 entry: fetch a page with a browser-faithful fingerprint.
 pub async fn fetch_target(url: &str, opts: &SessionOpts) -> Result<HtmlResponse, DracoError> {
-    let client = shared_client(opts.proxy.as_deref())?;
-    // Operation-scoped jar when the caller supplied one (cookies persist across
-    // the page fetch, its subresources, and the rest of the job); otherwise a
-    // throwaway per-call jar for a one-shot fetch. See [`SharedCookieJar`].
-    let jar = jar_for(opts);
-    // Robots gate + per-host spacing happen before the real request.
-    guard_request(&client, &jar, url, opts).await?;
-    // No explicit headers: let the emulation preset supply Chrome's header set
-    // (names, values, and order) so the request-header fingerprint is faithful.
-    send_with_retry(|| dress(client.get(url), &jar, opts)).await
+    let stealth_info = resolve_stealth_for_url(url, opts);
+    
+    let (min, max, proxy_mode, max_retries) = stealth_info
+        .as_ref()
+        .map(|(min, max, m, r)| (*min, *max, m.clone(), *r))
+        .unwrap_or((0, 0, ProxyMode::RotateOnBlocked, 3));
+
+    if min > 0 || max > 0 {
+        let delay = if min == max {
+            min
+        } else {
+            min + (rand::random::<u64>() % (max - min + 1))
+        };
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+    }
+
+    let mut attempt = 0;
+    loop {
+        let started = Instant::now();
+        
+        let current_proxy = if let Some(stealth) = opts.stealth.as_ref() {
+            if !stealth.proxies.is_empty() {
+                if proxy_mode == ProxyMode::AlwaysRotate {
+                    let idx = CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
+                    Some(stealth.proxies[idx % stealth.proxies.len()].clone())
+                } else {
+                    let idx = CURRENT_PROXY_INDEX.load(Ordering::Relaxed);
+                    Some(stealth.proxies[idx % stealth.proxies.len()].clone())
+                }
+            } else {
+                opts.proxy.clone()
+            }
+        } else {
+            opts.proxy.clone()
+        };
+
+        let client = shared_client(current_proxy.as_deref())?;
+        let jar = jar_for(opts);
+
+        if let Err(e) = guard_request(&client, &jar, url, opts).await {
+            tracing::error!("Pre-flight guard failed: {:?}", e);
+        }
+
+        let mut rb = client.get(url);
+        rb = dress_stealth(rb, &jar, opts, url);
+
+        let resp = rb.send().await;
+
+        match resp {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                
+                if (status == 429 || status == 403) && attempt < max_retries {
+                    tracing::warn!("Blocked with status {}, rotating proxy and retrying...", status);
+                    if let Some(stealth) = opts.stealth.as_ref() {
+                        if !stealth.proxies.is_empty() && proxy_mode == ProxyMode::RotateOnBlocked {
+                            CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let wait = backoff_delay(attempt as u32, None);
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    continue;
+                }
+
+                if is_retryable_status(status) && attempt < max_retries {
+                    let retry_after = resp
+                        .headers()
+                        .get(wreq::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_owned());
+                    let wait = backoff_delay(attempt as u32, retry_after.as_deref());
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    continue;
+                }
+
+                return finalize_response(resp, started).await;
+            }
+            Err(e) => {
+                if attempt < max_retries {
+                    tracing::warn!("Request failed: {:?}, rotating proxy and retrying...", e);
+                    if let Some(stealth) = opts.stealth.as_ref() {
+                        if !stealth.proxies.is_empty() && proxy_mode == ProxyMode::RotateOnBlocked {
+                            CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let wait = backoff_delay(attempt as u32, None);
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    continue;
+                }
+                return Err(classify_wreq_error(&e, "request"));
+            }
+        }
+    }
 }
 
 /// Replay a constructed (Tier 1) or intercepted (Tier 2) request with the same
@@ -163,32 +369,115 @@ pub async fn replay(
     spec: &HttpRequestSpec,
     opts: &SessionOpts,
 ) -> Result<HtmlResponse, DracoError> {
-    let client = shared_client(opts.proxy.as_deref())?;
-    let jar = jar_for(opts);
+    let stealth_info = resolve_stealth_for_url(&spec.url, opts);
+    
+    let (min, max, proxy_mode, max_retries) = stealth_info
+        .as_ref()
+        .map(|(min, max, m, r)| (*min, *max, m.clone(), *r))
+        .unwrap_or((0, 0, ProxyMode::RotateOnBlocked, 3));
+
+    if min > 0 || max > 0 {
+        let delay = if min == max {
+            min
+        } else {
+            min + (rand::random::<u64>() % (max - min + 1))
+        };
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+        }
+    }
 
     let method = parse_method(&spec.method)?;
     let body = decode_body(spec.body_b64.as_deref())?;
-    // Preserve the caller's exact header order + original casing: it is
-    // fingerprint-relevant for an intercepted request.
     let ordered = build_ordered_headers(&spec.headers)?;
 
-    guard_request(&client, &jar, &spec.url, opts).await?;
+    let mut attempt = 0;
+    loop {
+        let started = Instant::now();
+        
+        let current_proxy = if let Some(stealth) = opts.stealth.as_ref() {
+            if !stealth.proxies.is_empty() {
+                if proxy_mode == ProxyMode::AlwaysRotate {
+                    let idx = CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
+                    Some(stealth.proxies[idx % stealth.proxies.len()].clone())
+                } else {
+                    let idx = CURRENT_PROXY_INDEX.load(Ordering::Relaxed);
+                    Some(stealth.proxies[idx % stealth.proxies.len()].clone())
+                }
+            } else {
+                opts.proxy.clone()
+            }
+        } else {
+            opts.proxy.clone()
+        };
 
-    send_with_retry(|| {
-        let mut rb = dress(
-            client
-                .request(method.clone(), &spec.url)
-                .headers(ordered.map.clone())
-                .orig_headers(ordered.orig.clone()),
-            &jar,
-            opts,
-        );
+        let client = shared_client(current_proxy.as_deref())?;
+        let jar = jar_for(opts);
+
+        if let Err(e) = guard_request(&client, &jar, &spec.url, opts).await {
+            tracing::error!("Pre-flight guard failed: {:?}", e);
+        }
+
+        let mut rb = client
+            .request(method.clone(), &spec.url)
+            .headers(ordered.map.clone())
+            .orig_headers(ordered.orig.clone());
+
+        rb = dress_stealth(rb, &jar, opts, &spec.url);
         if let Some(bytes) = body.clone() {
             rb = rb.body(bytes);
         }
-        rb
-    })
-    .await
+
+        let resp = rb.send().await;
+
+        match resp {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                
+                if (status == 429 || status == 403) && attempt < max_retries {
+                    tracing::warn!("Blocked with status {}, rotating proxy and retrying...", status);
+                    if let Some(stealth) = opts.stealth.as_ref() {
+                        if !stealth.proxies.is_empty() && proxy_mode == ProxyMode::RotateOnBlocked {
+                            CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let wait = backoff_delay(attempt as u32, None);
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    continue;
+                }
+
+                if is_retryable_status(status) && attempt < max_retries {
+                    let retry_after = resp
+                        .headers()
+                        .get(wreq::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .map(|s| s.to_owned());
+                    let wait = backoff_delay(attempt as u32, retry_after.as_deref());
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    continue;
+                }
+
+                return finalize_response(resp, started).await;
+            }
+            Err(e) => {
+                if attempt < max_retries {
+                    tracing::warn!("Request failed: {:?}, rotating proxy and retrying...", e);
+                    if let Some(stealth) = opts.stealth.as_ref() {
+                        if !stealth.proxies.is_empty() && proxy_mode == ProxyMode::RotateOnBlocked {
+                            CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    let wait = backoff_delay(attempt as u32, None);
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(wait)).await;
+                    continue;
+                }
+                return Err(classify_wreq_error(&e, "request"));
+            }
+        }
+    }
 }
 
 /// Resolve the cookie store for a request: the caller's operation-scoped jar
@@ -229,8 +518,6 @@ const MAX_REDIRECTS: usize = 10;
 /// Connect-phase timeout, derived as a fraction of the total budget but never
 /// larger than this ceiling.
 const CONNECT_TIMEOUT_CEIL_MS: u64 = 10_000;
-/// Bounded retry attempts for retryable statuses (429/503).
-const MAX_RETRIES: u32 = 3;
 /// Cap on any single honored `Retry-After` delay, so a hostile server cannot
 /// park us for minutes.
 const RETRY_AFTER_CAP_MS: u64 = 20_000;
@@ -328,38 +615,6 @@ async fn guard_request(
     }
     apply_host_delay(url, opts.delay_ms).await;
     Ok(())
-}
-
-/// Send `make` (a fresh [`RequestBuilder`](wreq::RequestBuilder) each attempt)
-/// with bounded retry/backoff on 429/503, honoring `Retry-After`.
-async fn send_with_retry<F>(make: F) -> Result<HtmlResponse, DracoError>
-where
-    F: Fn() -> wreq::RequestBuilder,
-{
-    let mut attempt: u32 = 0;
-    loop {
-        let started = Instant::now();
-        let resp = make().send().await;
-
-        match resp {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                if is_retryable_status(status) && attempt < MAX_RETRIES {
-                    let retry_after = resp
-                        .headers()
-                        .get(wreq::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .map(|s| s.to_owned());
-                    let wait = backoff_delay(attempt, retry_after.as_deref());
-                    attempt += 1;
-                    tokio::time::sleep(Duration::from_millis(wait)).await;
-                    continue;
-                }
-                return finalize_response(resp, started).await;
-            }
-            Err(e) => return Err(classify_wreq_error(&e, "request")),
-        }
-    }
 }
 
 /// Consume a [`wreq::Response`] into an [`HtmlResponse`], preserving response

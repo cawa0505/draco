@@ -8,3 +8,4 @@ description = "Frozen wire & result contract for Draco."
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }

@@ -90,22 +90,20 @@ session 持 page map `{id → isolate document}`，切換換 active document。�
 努力：1–2 天。低優先，parity 補齊非痛點。
 Gate：雙 tab 獨立 JS 狀態、切換後 serialize 正確。
 
-## Phase 4 — 瀏覽器引擎 opt-in（screenshot / 真實 layout）— [已決策：等 rustwright-core]
+## Phase 4 — Stealth Mode & Anti-Blocking (抗封鎖自適應引擎，v0.23.0 [實作中])
 
-happy-dom 無 layout/paint — screenshot 是跨不過的硬邊界。Rust 選項（2026-08 查證）：
+針對高防爬電商網站（如 momo）與 WAF 的 429/403，實作底層自動防護：
+- **Header Emulation**: Desktop Chrome 與 Mobile Safari User-Agent 隨機切換、自動生成匹配之 Sec-Ch-Ua 指紋、Platform 及 Mobile 指標。
+- **Humanized Jitter Delay**: Domain 等級自適應隨機抖動延遲，拒絕固定週期特徵。
+- **Transparent Proxy Rotation**: 支援 SOCKS5/HTTP 代理池（含 Residential Proxy 與 Tor/Local ADB 輪換）。被封時 Rust 底層自動輪換，對上層 MCP 零感。
+- **Auto-Retry & Circuit Breaker**: 遇到 429/403 時底層自動執行指數退避（Exponential Backoff）與 IP 輪換重試。
+- **TOML Configuration**: 全系統支援 `draco.toml`（或 `~/.config/draco/draco.toml`）作為設定檔。
 
-| 方案 | runtime 依賴 | 判決 |
-|---|---|---|
-| rustwright-core 0.1.x | 純 Rust，Skyvern 出品 | **[已決策] 主路線** — alpha（2026-07 才出），內建 Playwright 級 a11y + 截圖，無 driver；等 ≥0.2.0 再實作 |
-| **chromiumoxide 0.9.1** | 純 Rust CDP，只需 chromium binary | fallback。a11y 域齊全（`getFullAXTree`/`queryAXTree` 走 `Page::execute`，~30 行 wrapper）；fetcher 可取 ChromeHeadlessShell（~88MB zip）或重用既有 chrome；截圖 high-level API 現成 |
-| playwright-rs 0.15.1 | **Node 18+ + driver + chromium** | 出局 — Node runtime 破壞單一 static binary 部署 |
-| wry / webkit2gtk | 系統 webview，零下載 | 出局 — per-OS、需 display，layout 隨系統瀏覽器，不可預期 |
+## 已決策：缺少功能與決策記錄 (Screenshot & Real Layout)
 
-設計：`--browser-engine chromiumoxide` opt-in feature；default 路徑保持零瀏覽器。
-引擎作用：screenshot（element/fullPage）、真實 layout 互動、CDP 級 a11y（Phase 1 的 fidelity 升級）。
-部署：取代 docker 化 playwright-mcp 容器（3015）— 一個 daemon 全包。
-努力：3–5 天。成本：chromium binary ~88–160MB + 系統 libs（libnss3/libgtk-3/libgbm/fonts），
-feature-gated 不影響 distroless 部署。
+- **狀態**：暫不實作（Deferred / Out of Scope）。
+- **決策依據**：Draco 核心價值為 **DOM-only 自動化互動迴圈**（極致 Token 脫水、零瀏覽器、超低資源佔用），Screenshots 與真實 Layout 需要重型的 CDP/Chromium 引擎（如 chromiumoxide），會破壞 Draco 的單一靜態二進位（single-binary）輕量部署與極速特性。
+- **替代方案**：在需要真實 Layout、截圖、或解決 overlay 遮擋等 10% browser-only 互動時，保留並調用外部 stateful `playwright-mcp` 容器（例如 DockerSpace `:3015`）作為互補，而不將其侵入 Draco 核心。未來待 Skyvern 的純 Rust `rustwright-core` 成熟（≥0.2.0）後，再評估是否作為 opt-in 引擎引入。
 
 ## Out of scope
 
