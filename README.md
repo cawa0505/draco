@@ -39,7 +39,32 @@ headless browser fleet.
 - **`metadata`** — `title`, `description`, `language`, `canonical`, `favicon`,
   every `og:*` / `twitter:*` / `article:*` tag, plus `sourceURL`, `statusCode`,
   `contentType`.
+- **`select`** — targeted CSS selector extraction. Returns an array of matched elements containing collapsed plain-text and raw outerHTML, capped at 1000 matches per URL.
 - **`trace` + `timing`** — exactly which steps ran and where the milliseconds went.
+
+## Built for AI Agents: The MCP Ergonomics Leap 🚀
+
+While traditional scrapers output raw markdown or require heavy headless browsers (like Playwright) for interaction, Draco bridges the gap. It provides **browser-level agent-interaction capabilities without the browser-boot overhead**, operating directly in an in-process V8 sandboxed sandbox.
+
+This fork specifically redesigns the MCP layer to solve the primary friction points of AI-driven automation:
+
+### 1. Eliminating Selector Guesswork (Observation-First / Action-by-Ref)
+* **The Pain:** AI models often fail at writing or compiling fragile CSS selectors to click buttons or type into inputs.
+* **The Solution:** Draco implements a Playwright-class **Accessibility Snapshot** (`draco_interact_snapshot`). It serializes a semantic A11y tree (role, name, checked, disabled, etc.) and assigns stable reference keys (`e1`, `e2`, ...) directly to interactive nodes. Agents interact via references (`clickRef: "e1"`) instead of selector-string lottery.
+
+### 2. Vue/React DOM Re-render Resilience (Ref Self-Healing)
+* **The Pain:** Modern SPA frameworks dynamically destroy and recreate DOM nodes on state changes, immediately breaking hard pointers and throwing selector-not-found errors.
+* **The Solution:** During serialization, Draco tracks sequential occurrence indices to form an identity triple `(role, name, nth)` for each ref. If a target node is unmounted/remounted, **Draco's page-side engine dynamically heals the reference** and clicks the correct recreated element.
+
+### 3. Cutting Token Clutter (Interactive-Only & Promotion)
+* **The Pain:** Injecting reference attributes on every tag in a deep HTML tree bloats the prompt, wastes tokens, and confuses the model.
+* **The Solution:** Draco restricts references to core interactive roles by default. However, it dynamically **promotes** content nodes (like divs/spans) if they detect explicit `onclick` handlers, inline JS clicks, CSS `cursor: pointer` styles, or custom non-negative `tabindex` attributes. You get an ~80% leaner tree with 100% interactability.
+
+### 4. Robust Failures & Charset Fidelity (CJK Sniffing)
+* **The Pain:** Missing targets throw raw timeouts, and foreign-charset web pages (CJK: Traditional Chinese, Japanese, Korean) decode as U+FFFD (``) replacement garbage, blinding the LLM.
+* **The Solution:** 
+  - Failures are **self-describing** (`REF_NOT_FOUND` errors return the most recent A11y Snapshot as a dynamic `hint` to prompt immediate agent self-healing).
+  - The fetch pipeline integrates **WHATWG encoding sniffing** (BOM → Content-Type → HTML Meta prescan → UTF-8 fallback) so CJK pages render flawlessly.
 
 ## Install / build
 
@@ -102,8 +127,23 @@ draco scrape https://app.example.com --format json --extract '$.props.pageProps'
 draco scrape https://app.example.com --format both                # markdown + data
 ```
 
-Flags: `--format <markdown|html|raw-html|links|json|endpoints|both>` (repeatable;
-default `markdown`; `both` = `markdown`+`json`), `--json`, `--extract
+### Optional: CSS-Selector Extraction (`--format select` / `--selector`)
+
+If you want to extract specific DOM elements rather than the whole page's Markdown or entire API payloads, use the `select` format alongside `--selector` (or `selectors` in daemon/MCP requests):
+
+```sh
+# Extract specific CSS selector elements
+draco scrape https://news.ycombinator.com --format select --selector ".titleline > a"
+```
+
+Each match in the returned array contains:
+- `text` — the whitespace-collapsed inner plain text of the element.
+- `html` — the raw `outerHTML` of the element.
+
+Matches are automatically capped at 1000 per request to prevent out-of-memory or payload blowup.
+
+Flags: `--format <markdown|html|raw-html|links|json|endpoints|select|both>` (repeatable;
+default `markdown`; `both` = `markdown`+`json`), `--json`, `--selector <CSS_SELECTOR>`, `--extract
 <JSONPATH>`, `--no-main-content`, `--wait-for <ms>`, `--tier-max <0|1|2>`, `--proxy`, `--delay <ms>`, `--timeout <ms>`,
 `--capture-window-ms <ms>`, `--ignore-robots`, `--allow-unsafe-replay`,
 `--runtime-log`, `--pretty`. (`--no-jail` / `--strict-sandbox` are still accepted
@@ -343,10 +383,16 @@ curl -X POST localhost:3002/v1/interact/<id>/exec -H 'content-type: application/
 
 - **`exec`** — the turn is an async function body (may `await`, `return`s a
   value); the value is serialized under a budget (DOM nodes/functions described,
-  over-budget → a truncation descriptor unless `full`/`maxBytes`). **`navigate`**
+  over-budget → a truncation descriptor unless `full`/maxBytes). **`navigate`**
   — fetch the next document (cookie-aware) and re-hydrate in place; "click a link
   by selector" is `exec("return el.href")` → `navigate(href)`. **`scrape`** —
   Markdown/HTML/links of the live DOM. `DELETE` closes; idle sessions are reaped.
+- **Agent Ergonomics (A11y Snapshot & Ref-Targeting)** — To maximize AI agent automation success, Draco diverges from standard browser scrapers by supporting an observation-first, action-by-ref workflow:
+  - **`draco_interact_snapshot`** — Computes a pure, semantic accessibility snapshot mapping roles (`button`, `link`), names (accName), states (checked, disabled), and stable reference keys (`e1`, `e2`, ...) on interactive nodes.
+  - **Action-by-Ref** — Action steps (`clickRef`, `typeRef`, `pressRef`, `scrollRef`, `hoverRef`, `waitRef`) target elements directly by their stable refs (`eN`), completely eliminating CSS selector guesswork.
+  - **Ref Self-Healing** — Uses identity triples `(role, name, nth)` to dynamically heal references on React/Vue/Svelte re-renders (where DOM nodes are unmounted/remounted).
+  - **Interactive-Only Selection & Promotion** — Excludes static container elements from receiving refs while promoting content elements with inline `onclick` handlers, pointer style (`cursor: pointer`), or explicit non-negative `tabindex`.
+  - **Self-Describing Failures** — Missing or detached refs return a machine-readable `REF_NOT_FOUND` error together with a fresh accessibility snapshot as a dynamic `hint`, allowing the agent to heal and retry immediately.
 - Sessions are held in-memory on the daemon, concurrency-capped and idle-reaped.
   The interact surface needs Tier 2 (V8); a lean serve build omits it.
 
@@ -380,7 +426,7 @@ opencode; shell-style `$HOME` is not):
 
 The same server is bound on the daemon at `POST /mcp` (minimal Streamable-HTTP
 subset: single-message POST → single JSON response, `202` for notifications).
-Three tools, all annotated read-only:
+Tools, all annotated read-only:
 - `draco_scrape` (`url`, `formats: ["markdown"|"json"|"select"|"endpoints"]`,
   `selectors: ["css, ..."]` for the `select` format, `tierMax`,
   `captureWindowMs`, `timeout`, `ignoreRobots`) — scrape to Markdown/JSON, or
@@ -391,10 +437,12 @@ Three tools, all annotated read-only:
 - `draco_search` (`query`, `limit`, `tbs`, `location`, `timeout`, `formats`) —
   parallel multi-engine web search merged by reciprocal-rank consensus; with
   `formats` it also scrapes each result and merges the content onto the hit.
-- `draco_interact_open`/`exec`/`navigate`/`scrape`/`close` — a stateful page
-  session an agent drives across calls (open → run JS / click / navigate → read
-  → close), cookies persisted for the session. Advertised only on the daemon
-  (`POST /mcp`), where sessions are held; requires Tier 2.
+- `draco_interact_open` / `close` / `exec` / `navigate` / `scrape` — stateful page
+  sessions where cookies are persisted for the session.
+- `draco_interact_snapshot` — generates a pure accessibility snapshot of the current
+  DOM tree (roles, accNames, states) with stable targetable refs (`eN`) for interactive nodes.
+- `draco_interact_act` — dispatches sequential DOM interactions (`clickRef`, `typeRef`,
+  `pressRef`, `scrollRef`, `hoverRef`, `waitRef`) via stable refs with automatic self-healing.
 
 Tool-level failures come back as `isError` results the model can react to;
 protocol misuse is a proper JSON-RPC error.
