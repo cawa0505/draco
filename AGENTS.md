@@ -52,9 +52,10 @@ Deliberate divergences from upstream (keep when merging):
 - `cargo test --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 
-**嚴格編譯規範 (警告零容忍)**:
-- 編譯與檢查時（如 `cargo check / build / clippy`），必須徹底排除所有編譯 Warning。
-- 不可留有未使用的變數、未使用的 dead code、未使用的函數、無效的 import 或是未使用的常數。若重構後產生 dead code，必須立即乾淨地刪除或進行適當標記。
+**Strict compilation policy (zero warnings)**:
+- All compiler warnings must be eliminated during compilation and checks such as `cargo check`, `cargo build`, and `cargo clippy`.
+- Do not leave unused variables, dead code, unused functions, invalid imports, or unused constants. Remove dead code introduced by refactoring immediately, or explicitly mark it when that is intentional.
+- Compiler and Clippy warnings are strictly forbidden in commits. Every warning must be fixed before committing so that compilation is 100% clean.
 
 After a source build, restart the systemd user service so the new binary is
 active immediately: `systemctl --user restart draco.service` (binary at
@@ -78,4 +79,3 @@ active immediately: `systemctl --user restart draco.service` (binary at
 - **Jitter Delay**: Configurable random delay interval [min, max] matching the domain configuration.
 - **Proxy Rotation**: Transparent HTTP/SOCKS5 proxy rotation with exponential backoff on 429/403 or network failures.
 - **TOML Configuration**: Core system reads `draco.toml` from cwd or `~/.config/draco/draco.toml`.
-

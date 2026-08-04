@@ -83,19 +83,14 @@ pub struct StealthDomainConfig {
 }
 
 /// Proxy rotation mode.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ProxyMode {
     /// Rotate proxy only when blocked (429/403).
+    #[default]
     RotateOnBlocked,
     /// Rotate proxy on every request.
     AlwaysRotate,
-}
-
-impl Default for ProxyMode {
-    fn default() -> Self {
-        ProxyMode::RotateOnBlocked
-    }
 }
 
 /// TOML-compatible root structure for `draco.toml` parsing.

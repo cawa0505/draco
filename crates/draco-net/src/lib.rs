@@ -146,8 +146,8 @@ impl Default for SessionOpts {
     }
 }
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use draco_types::ProxyMode;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 static CURRENT_PROXY_INDEX: AtomicUsize = AtomicUsize::new(0);
 
@@ -164,20 +164,24 @@ const MOBILE_SAFARI_UAS: &[&str] = &[
     "Mozilla/5.0 (iPad; CPU OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
 ];
 
-fn resolve_stealth_for_url(url_str: &str, opts: &SessionOpts) -> Option<(u64, u64, ProxyMode, usize)> {
+fn resolve_stealth_for_url(
+    url_str: &str,
+    opts: &SessionOpts,
+) -> Option<(u64, u64, ProxyMode, usize)> {
     let stealth = opts.stealth.as_ref()?;
     if !stealth.enabled {
         return None;
     }
     let host = host_of(url_str).unwrap_or_default();
-    
+
     let mut jitter = stealth.jitter_range;
     let mut p_mode = ProxyMode::RotateOnBlocked;
     let mut retries = stealth.max_retries;
 
-    let matched_domain = stealth.domains.iter().find(|(k, _)| {
-        host == **k || host.ends_with(&format!(".{}", k))
-    });
+    let matched_domain = stealth
+        .domains
+        .iter()
+        .find(|(k, _)| host == **k || host.ends_with(&format!(".{}", k)));
 
     if let Some((_, domain_cfg)) = matched_domain {
         if let Some(j) = domain_cfg.jitter_range {
@@ -188,7 +192,7 @@ fn resolve_stealth_for_url(url_str: &str, opts: &SessionOpts) -> Option<(u64, u6
             retries = r;
         }
     }
-    
+
     Some((jitter.0, jitter.1, p_mode, retries))
 }
 
@@ -209,7 +213,7 @@ fn dress_stealth(
     url_str: &str,
 ) -> wreq::RequestBuilder {
     let mut rb = dress(rb, jar, opts);
-    
+
     if let Some(stealth) = &opts.stealth {
         if stealth.enabled {
             let mut selected_ua = None;
@@ -223,7 +227,7 @@ fn dress_stealth(
 
             if let Some(ua) = selected_ua {
                 rb = rb.header("user-agent", ua);
-                
+
                 if stealth.sec_ch_ua_auto {
                     let is_mobile = stealth.user_agent_mode == "mobile_safari";
                     let platform = if is_mobile {
@@ -257,14 +261,14 @@ fn dress_stealth(
             }
         }
     }
-    
+
     rb
 }
 
 /// Tier 0 entry: fetch a page with a browser-faithful fingerprint.
 pub async fn fetch_target(url: &str, opts: &SessionOpts) -> Result<HtmlResponse, DracoError> {
     let stealth_info = resolve_stealth_for_url(url, opts);
-    
+
     let (min, max, proxy_mode, max_retries) = stealth_info
         .as_ref()
         .map(|(min, max, m, r)| (*min, *max, m.clone(), *r))
@@ -284,7 +288,7 @@ pub async fn fetch_target(url: &str, opts: &SessionOpts) -> Result<HtmlResponse,
     let mut attempt = 0;
     loop {
         let started = Instant::now();
-        
+
         let current_proxy = if let Some(stealth) = opts.stealth.as_ref() {
             if !stealth.proxies.is_empty() {
                 if proxy_mode == ProxyMode::AlwaysRotate {
@@ -316,9 +320,12 @@ pub async fn fetch_target(url: &str, opts: &SessionOpts) -> Result<HtmlResponse,
         match resp {
             Ok(resp) => {
                 let status = resp.status().as_u16();
-                
+
                 if (status == 429 || status == 403) && attempt < max_retries {
-                    tracing::warn!("Blocked with status {}, rotating proxy and retrying...", status);
+                    tracing::warn!(
+                        "Blocked with status {}, rotating proxy and retrying...",
+                        status
+                    );
                     if let Some(stealth) = opts.stealth.as_ref() {
                         if !stealth.proxies.is_empty() && proxy_mode == ProxyMode::RotateOnBlocked {
                             CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
@@ -370,7 +377,7 @@ pub async fn replay(
     opts: &SessionOpts,
 ) -> Result<HtmlResponse, DracoError> {
     let stealth_info = resolve_stealth_for_url(&spec.url, opts);
-    
+
     let (min, max, proxy_mode, max_retries) = stealth_info
         .as_ref()
         .map(|(min, max, m, r)| (*min, *max, m.clone(), *r))
@@ -394,7 +401,7 @@ pub async fn replay(
     let mut attempt = 0;
     loop {
         let started = Instant::now();
-        
+
         let current_proxy = if let Some(stealth) = opts.stealth.as_ref() {
             if !stealth.proxies.is_empty() {
                 if proxy_mode == ProxyMode::AlwaysRotate {
@@ -433,9 +440,12 @@ pub async fn replay(
         match resp {
             Ok(resp) => {
                 let status = resp.status().as_u16();
-                
+
                 if (status == 429 || status == 403) && attempt < max_retries {
-                    tracing::warn!("Blocked with status {}, rotating proxy and retrying...", status);
+                    tracing::warn!(
+                        "Blocked with status {}, rotating proxy and retrying...",
+                        status
+                    );
                     if let Some(stealth) = opts.stealth.as_ref() {
                         if !stealth.proxies.is_empty() && proxy_mode == ProxyMode::RotateOnBlocked {
                             CURRENT_PROXY_INDEX.fetch_add(1, Ordering::Relaxed);
