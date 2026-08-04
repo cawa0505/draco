@@ -951,7 +951,7 @@ dependencies = [
 
 [[package]]
 name = "draco-cli"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "base64",
@@ -972,7 +972,7 @@ dependencies = [
 
 [[package]]
 name = "draco-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -988,7 +988,7 @@ dependencies = [
 
 [[package]]
 name = "draco-heavy"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "chaser-oxide",
@@ -1008,7 +1008,7 @@ dependencies = [
 
 [[package]]
 name = "draco-net"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "base64",
@@ -1023,7 +1023,7 @@ dependencies = [
 
 [[package]]
 name = "draco-runtime"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "deno_core",
  "deno_error",
@@ -1036,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "draco-static"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "dom_smoothie",
  "draco-types",
@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "draco-types"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "serde",
  "serde_json",
