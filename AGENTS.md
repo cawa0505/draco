@@ -67,8 +67,8 @@ active immediately: `systemctl --user restart draco.service` (binary at
   host). Override in `~/.config/systemd/user/draco.service.d/port.conf`.
 - MCP: local/command mode (`draco mcp` stdio) in client configs; the daemon also
   binds `POST /mcp` (minimal). Remote MCP (Streamable HTTP) is Phase 0 of the
-  roadmap. playwright-mcp (DockerSpace remote :3015) stays as the browser
-  complement until Phase 4.
+  roadmap. Microsoft Playwright MCP stays as an optional external browser
+  complement until Phase 4; no local deployment details belong in this repo.
 - install.sh downloads from `cawa0505/draco/releases/latest`; `--from-source`
   builds the repo and installs to `~/.draco/bin`.
 
@@ -79,3 +79,67 @@ active immediately: `systemctl --user restart draco.service` (binary at
 - **Jitter Delay**: Configurable random delay interval [min, max] matching the domain configuration.
 - **Proxy Rotation**: Transparent HTTP/SOCKS5 proxy rotation with exponential backoff on 429/403 or network failures.
 - **TOML Configuration**: Core system reads `draco.toml` from cwd or `~/.config/draco/draco.toml`.
+
+### Plugin framework protocol
+
+This repository defines a neutral plugin framework for extending Draco's request pipeline.
+
+**Framework scope**
+- This public repository provides only the plugin framework, lifecycle contracts,
+  SDK/API, registry, and integration tests.
+- Do not mention, document, reference, or encode the name, repository path,
+  behavior, credentials, or implementation details of any external, private,
+  proprietary, or planned plugin anywhere in this repository.
+- Examples and fixtures must use neutral names such as `TestPlugin` and generic
+  actions; they must not imply a specific product or private use case.
+
+**Technical constraints**
+- The Rust SDK contract lives in a small, dependency-light
+  `draco-plugin-api` workspace crate so plugin crates do not depend on
+  `draco-core` and the dependency graph remains one-way.
+- Initial loading is compile-time registration only. Do not expose Rust trait
+  objects through `.so` / `.dylib`; Rust has no stable trait-object ABI.
+- Dynamic loading is a separate future design requiring a stable ABI boundary,
+  version negotiation, and crash isolation. No dynamic loader scaffolding is
+  included now.
+
+**Core responsibilities**
+- Core owns deadlines, cancellation, retries, resource limits, validation, and
+  conversion to structured MCP errors.
+- Plugins may request actions but may not execute unbounded control flow.
+- No registered plugins may preserve current behavior and avoid hook traversal
+  on the hot path.
+
+**Contract terms**
+- The public API defines the `DracoPlugin` trait and `PluginRegistry`.
+- Plugin lifecycle includes `pre_request`, `post_response`, and `on_dehydrate`
+  hooks with `PluginAction` control flow.
+- All MCP plugin failures satisfy R5 self-describing failures with stable
+  `code` and actionable `hint`.
+- External implementation code and credentials never enter this repository,
+  artifacts, logs, fixtures, or CI.
+
+**Loading model**
+- Phase 1 uses compile-time registration. The contract lives in a small,
+  dependency-light crate that plugin crates depend on; `draco-core` consumes
+  the same contract, keeping the graph one-way.
+- The registry needs heterogeneous trait objects; Phase 1 uses `async_trait`
+  because native async traits aren't object-safe. No assumption of "zero-cost";
+  it's an acceptance target measured during benchmarking.
+
+**Future design notes**
+- `[待討論]` Define cache interception semantics separately; caching does not fit
+  cleanly into the three request/response/dehydrate hooks.
+
+**Delivery roadmap**
+- See `spec/plugin-system/spec.md` for detailed Phase 1-4 delivery plan.
+
+**Acceptance criteria**
+- No behavior change when no plugins are registered.
+- Disabled-plugin overhead measured and must show no material regression against v0.23.0 (threshold finalized after baseline).
+- All gates pass with zero warnings.
+
+**Usage guidance**
+- External plugin development follows the public `draco-plugin-api` contract.
+- Do not modify this repository with plugin-specific code, configuration, or documentation.
+- Follow the neutral API contract and use generic names in examples and fixtures.

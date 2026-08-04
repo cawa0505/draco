@@ -14,9 +14,8 @@
 ## Legacy specs（不搬移）
 
 - `docs/select-format-spec.md` — select format，implemented (v1)
-- `docs/roadmap.md` — playwright-mcp / ax-mcp parity 階段化 roadmap
+- `docs/roadmap.md` — ax、Playwright MCP、agent-browser 的能力邊界與階段化 roadmap
 
 ## 下一個 OpenSpec 標的
 
-Phase 1 — a11y snapshot + ref 定位（旗艦，見 docs/roadmap.md）。啟動時開
-`spec/a11y-snapshot/spec.md`。
+- `plugin-system/spec.md` — v0.24.0 microkernel plugin pipeline，approved proposal

@@ -53,7 +53,7 @@ This fork specifically redesigns the MCP layer to solve the primary friction poi
 
 Use Draco first when the task only needs page content, structured data, or DOM interaction. Escalate to agent-browser when the task depends on real layout, screenshots, downloads, or browser-only APIs.
 
-> 🛡️ **Defensive Fallback Strategy:** Draco is designed for ultra-low latency and token efficiency. For heavily protected enterprise sites utilizing advanced JS challenges (Cloudflare Turnstile, DataDome), we recommend pairing Draco with a headless container instance like `playwright-mcp` (e.g. running on `:3015`) as a high-fidelity rendering fallback, maintaining a strict separation of concerns.
+> 🛡️ **Defensive Fallback Strategy:** Draco is designed for ultra-low latency and token efficiency. For heavily protected enterprise sites requiring a real browser, pair Draco with [Microsoft Playwright MCP](https://github.com/microsoft/playwright-mcp) as a high-fidelity rendering fallback, maintaining a strict separation of concerns.
 
 ### 1. Eliminating Selector Guesswork (Observation-First / Action-by-Ref)
 * **The Pain:** AI models often fail at writing or compiling fragile CSS selectors to click buttons or type into inputs.

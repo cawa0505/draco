@@ -58,7 +58,7 @@ tool. Each description states: input schema, output shape, cost/tier,
 failure modes — terse.
 - Accept: description audit passes a review against this section.
 
-## Phase 1 design — R1 snapshot + ref (in-progress, 2026-08-03)
+## Phase 1 design — R1 snapshot + ref (implemented in v0.22.0, 2026-08-03)
 
 Researched: happy-dom has NO a11y API (any version, incl. master) → role/name/
 state computed manually (~150 lines JS in the isolate). Schema mirrors Playwright
