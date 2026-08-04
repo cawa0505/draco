@@ -1,21 +1,29 @@
-# Select format spec — CSS selector extraction
+# Select Format Specification — CSS Selector Extraction
 
-Status: **implemented (v1)** · Area: wire contract (draco-types), core (FormatSet/Config/machine), static (selector engine), CLI, daemon, MCP
+Status: **implemented (v1)** · Area: Wire Contract (`draco-types`), Core (`FormatSet`/`Config`/`machine`), Static (`selector` engine), CLI, Daemon, MCP.
+
+---
 
 ## 1. Motivation
 
-ax-scraper 的 CSS selector 萃取（`scrape_web(url, selector)` → 匹配節點文字）是 Draco 取代它時唯一缺的能力。既有 `--extract`（`extract_schema.rs`）是 schema 驅動的結構化萃取——要寫 JSON schema；這裡補一個裸 selector 模式：給一個 CSS selector，拿回匹配節點的 text + HTML。
+The ability to extract specific DOM elements based on a CSS selector and retrieve their raw text or HTML is a highly-requested feature for fine-grained scraping, historically matching capabilities of older libraries (like `ax-scraper`). 
+
+While Draco already provides schema-driven structured JSON extraction (`--extract` via JSON Schema), this specification introduces a lightweight, raw selector mode: given one or more CSS selectors, retrieve the matched elements' whitespace-collapsed text and raw outerHTML directly.
+
+---
 
 ## 2. Design
 
-**新 format `select`** + **重複 flag `--selector <CSS>`**（`Config.selectors: Vec<String>`）。
+This feature introduces a new output format `select` paired with a repeatable CLI flag `--selector <CSS>` (which maps to `Config.selectors: Vec<String>`).
 
-- `--selector` 隱含 `select` format（`--format select` 可不寫）。
-- `--format select` 但沒給 `--selector` → reject（CLI exit 1 / daemon 400），與 `parse_formats` 的既有 reject 同級。
-- 無匹配 → `matches: []`（非錯誤）。
-- 非法 selector → 請求層 reject（`DracoError::Config`），不像 `extract_schema` 那樣 warn-and-null——這是使用者直接打的 flag，打錯要響。
+### Rules & Behaviors
+- **Implicit Format**: Providing `--selector` automatically implies the `select` format (you do not need to explicitly declare `--format select`).
+- **Format without Selectors**: Specifying `--format select` without providing any `--selector` parameter will reject the request with `exit 1` (CLI) or a `400 Bad Request` (Daemon).
+- **No Matches**: If a selector matches nothing, it returns `matches: []` rather than throwing an error.
+- **Invalid Selectors**: An invalid CSS selector triggers an immediate request-level rejection (`DracoError::Config`). It does not fail silently, as it represents a direct user configuration error.
 
-**輸出契約**（`ExtractionResult` 加一個 additive 欄位，與 `links`/`endpoints` 同級，`None` 時從 wire 省略）：
+### Wire Contract
+An additive, optional field is added to `ExtractionResult` (matching the level of `links` and `endpoints`). This field is omitted from serialization when `None`:
 
 ```json
 "selector": [
@@ -28,51 +36,63 @@ ax-scraper 的 CSS selector 萃取（`scrape_web(url, selector)` → 匹配節�
 ]
 ```
 
-- 每個輸入 selector 一組，全匹配，上限沿用 `extract_schema::MAX_MATCHES`（1000）。
-- `text`：whitespace 收斂的文字內容（複用 `extract_schema::collapse_ws`）。
-- `html`：匹配元素的 **outerHTML**，raw（不做 absolutize/清洗——那是 markdown/html 管線的事，這裡要忠實原樣）。
+- Matches are grouped per input selector, retaining search order.
+- Each match is capped at `1000` (reusing `extract_schema::MAX_MATCHES`).
+- `text`: Whitespace-collapsed plain text (reusing `extract_schema::collapse_ws`).
+- `html`: Raw **outerHTML** of the matched element. It is left unaltered (no href absolute resolution or styling sanitization) to preserve local fidelity.
 
-## 3. Staging — select 完全鏡像 `html` format
+---
 
-- 靜態階段：與 `html` 同一個 DOM（`filter_body` 之後、`machine.rs` `static` 分支），與 include/exclude-tags 自然組合。
-- render 升級：hydrated DOM 刷新 `html` 的同一個點（`machine.rs` ~1266）同步刷新 select——SPA 也能選。
-- `FormatSet::select` 併入 `wants_static_content()`（`is_static_terminal` 自動涵蓋）。
-- trace：`static.select` / 刷新時 `runtime.render` 之後的 select step，記錄匹配數。
-- 各 surface 的輸出 gating 比照 `html` 現行行為。
+## 3. Execution Pipeline (Static & Hydrated)
 
-## 4. Surfaces
+The `select` format mirrors the extraction lifecycle of the `html` format:
+- **Static Pipeline**: Executes against the initial static HTML document (post `filter_body` in `machine.rs`) alongside include/exclude tag parameters.
+- **Render Pipeline**: For SPAs, the hydrated DOM is queried directly inside the V8 isolate once rendering is complete, updating the `selector` field dynamically.
+- **Format Integration**: `FormatSet.select` is included in `wants_static_content()` to ensure the fetch engine fetches static HTML when no JS hydration is requested.
+- **Trace & Telemetry**: The pipeline records a `static.select` or `runtime.render.select` trace step reporting the total number of matched nodes.
 
-| Surface | v1 | 註 |
+---
+
+## 4. Interfaces & Integration Gaps
+
+| Interface | v1 Status | Details & Notes |
 |---|---|---|
-| CLI `draco scrape` | ✅ `--format select --selector "…"`（repeatable） | |
-| daemon `POST /v1/scrape` | ✅ `formats: ["select"]` + `selector`（string 或 array） | Draco extension 欄位，同 `tierMax` 定位；`data.selector` 進 envelope |
-| MCP `draco_scrape` | ✅ `selector` param（string 或 array） | schema enum 加 `"select"` |
-| crawl / batch / search | [待討論] | formats 已走 `parse_formats`，但 selector 需穿過 `PageQuery`；v1 不穿 |
-| interact scrape | [待討論] | live DOM 也能選，但 scope 先不收 |
+| **CLI (`draco scrape`)** | ✅ Implemented | `--format select --selector "..."` (Repeatable) |
+| **Daemon (`POST /v1/scrape`)** | ✅ Implemented | `formats: ["select"]` + `selectors: ["..."]` (String or Array) |
+| **MCP (`draco_scrape` tool)** | ✅ Implemented | Added `selectors` property to MCP tool schema. |
+| **Crawl / Batch / Search** | `[Pending]` | Requires updates to `PageQuery` schemas; deferred to Phase 2. |
+| **Interact Scrape** | `[Pending]` | Live interact session selector querying is scoped for Phase 2. |
 
-## 5. Files touched（blast radius 8）
+---
 
-1. `crates/draco-types/src/lib.rs` — `ExtractionResult.selector: Option<Vec<SelectorMatch>>` + `SelectorMatch{selector,text,html}`；roundtrip/omission 測試補欄位
-2. `crates/draco-core/src/lib.rs` — `FormatSet.select` + `Config.selectors`
-3. `crates/draco-core/src/machine.rs` — 兩個 staging 點 + trace step
-4. `crates/draco-core/src/interact.rs` — `ExtractionResult` 建構點補 `selector: None`
-5. `crates/draco-static/src/extract_schema.rs` — `select_matches(html, selectors) -> (Vec<SelectorMatch>, Vec<String>)`，複用 `collapse_ws`/`MAX_MATCHES` + 單元測試
-6. `crates/draco-cli/src/main.rs` — `--selector` flag + `--format select` 解析
-7. `crates/draco-cli/src/serve/mod.rs` — `parse_formats` 收 `select` + `to_firecrawl` 映射 + `/v1/scrape` request 欄位
-8. `crates/draco-cli/src/mcp.rs` — tool schema + `selector` param
+## 5. Blast Radius & Files Touched
 
-測試：draco-static `select_matches` 單元測試（text 收斂、outerHTML、無匹配、cap）、types roundtrip、serve `parse_formats`。
+1. **`crates/draco-types/src/lib.rs`** — Added `ExtractionResult.selector: Option<Vec<SelectorMatch>>` and `SelectorMatch { selector, text, html }`.
+2. **`crates/draco-core/src/lib.rs`** — Added `FormatSet.select` and `Config.selectors`.
+3. **`crates/draco-core/src/machine.rs`** — Configured the static and hydrated DOM extraction and trace endpoints.
+4. **`crates/draco-core/src/interact.rs`** — Initialized `selector: None` in interact session results.
+5. **`crates/draco-static/src/extract_schema.rs`** — Implemented helper `select_matches(html, selectors) -> (Vec<SelectorMatch>, Vec<String>)` with collapsing whitespaces.
+6. **`crates/draco-cli/src/main.rs`** — Registered `--selector` flag and validated formats.
+7. **`crates/draco-cli/src/serve/mod.rs`** — Updated `/v1/scrape` request body parsing and Firecrawl compatibility mappings.
+8. **`crates/draco-cli/src/mcp.rs`** — Registered selectors inside MCP tool descriptors.
 
-## 6. 不做（v1）
+---
 
-- 多 selector 合併輸出（各自分組即可）
-- `text`/`html` 以外的序列化（markdown of match → 可用 `--include-tag` + markdown 達成）
-- crawl/batch/search 穿 selector（[待討論]）
+## 6. Non-Goals
 
-## 7. 驗證
+- Merging different selectors into a single unified array.
+- Serializing matched nodes back to markdown (users can achieve this using `--include-tag` alongside standard markdown formatting).
+- Selector support inside bulk crawling pipelines (deferred).
 
-```
+---
+
+## 7. Verification & Tests
+
+```sh
+# Run targeted unit tests
 cargo test -p draco-static -p draco-types
 cargo test -p draco-cli -- serve::tests
+
+# End-to-end CLI validation
 draco scrape https://example.com --format select --selector "h1"
 ```
