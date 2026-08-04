@@ -864,8 +864,60 @@
   if (!g.__dracoA11yRefIndex) {
     g.__dracoA11yRefIndex = new Map();
   }
+  // Store identities for self-healing: ref string → { role, name, nth }
+  if (!g.__dracoA11yRefIdentities) {
+    g.__dracoA11yRefIdentities = new Map();
+  }
   g.__dracoRefEl = function (ref) {
-    return g.__dracoA11yRefIndex.get(ref) || null;
+    const el = g.__dracoA11yRefIndex.get(ref);
+    if (el && w.document.documentElement.contains(el)) {
+      return el;
+    }
+
+    // Detached or not found: attempt self-healing using identity triples
+    const identity = g.__dracoA11yRefIdentities ? g.__dracoA11yRefIdentities.get(ref) : null;
+    if (identity) {
+      const targetRole = identity.role;
+      const targetName = identity.name;
+      const targetNth = identity.nth;
+
+      let matchCount = 0;
+      let healedEl = null;
+
+      function findWalk(node) {
+        if (healedEl || !node || !node.nodeType) return;
+        if (node.nodeType !== 1) return;
+        if (isHidden(node)) return;
+
+        const r = getRole(node);
+        const n = getName(node);
+        const truncatedN = n.length > 200 ? n.substring(0, 200) : n;
+
+        if (r === targetRole && truncatedN === targetName) {
+          matchCount++;
+          if (matchCount === targetNth) {
+            healedEl = node;
+            return;
+          }
+        }
+
+        for (let child = node.firstChild; child; child = child.nextSibling) {
+          findWalk(child);
+        }
+      }
+
+      const root = w.document.body || w.document.documentElement;
+      findWalk(root);
+
+      if (healedEl) {
+        // Heal! Register healedEl under original ref
+        g.__dracoA11yRefMap.set(healedEl, ref);
+        g.__dracoA11yRefIndex.set(ref, healedEl);
+        return healedEl;
+      }
+    }
+
+    return null;
   };
 
   // Helper: check if element is hidden (display:none, visibility:hidden, aria-hidden)
@@ -1059,15 +1111,44 @@
 
   // Helper: check if element is interactive (eligible for refs)
   function isInteractive(el) {
+    if (isHidden(el)) return false;
+
     const role = getRole(el);
     const interactiveRoles = [
       "button", "link", "textbox", "checkbox", "radio", "combobox", "option",
-      "menu", "menuitem", "tab", "tabpanel", "switch", "slider", "spinbutton",
-      "progressbar", "separator", "alert", "dialog", "details", "summary"
+      "menuitem", "tab", "switch", "slider", "spinbutton", "summary"
     ];
-    if (!interactiveRoles.includes(role)) return false;
-    if (isHidden(el)) return false;
-    return true;
+
+    // Core interactive role checks
+    if (interactiveRoles.includes(role)) {
+      return true;
+    }
+
+    // Promotion / Clickable checks:
+    // 1. Explicit tabindex >= 0
+    if (el.hasAttribute("tabindex")) {
+      const val = parseInt(el.getAttribute("tabindex"), 10);
+      if (!isNaN(val) && val >= 0) return true;
+    }
+
+    // 2. Inline onclick attribute or property
+    if (el.hasAttribute("onclick") || (el.onclick && typeof el.onclick === "function")) {
+      return true;
+    }
+
+    // 3. cursor: pointer style
+    const style = w.getComputedStyle ? w.getComputedStyle(el) : null;
+    if (style && style.cursor === "pointer") {
+      return true;
+    }
+
+    // 4. Explicit aria role attribute that is interactive
+    if (el.hasAttribute("role")) {
+      const r = el.getAttribute("role").trim().toLowerCase();
+      if (interactiveRoles.includes(r)) return true;
+    }
+
+    return false;
   }
 
   // Helper: get element states based on role
@@ -1146,6 +1227,7 @@
       let nodeCount = 0;
       const MAX_NODES = 2000;
       const NAME_MAX_LEN = 200;
+      const seenCounts = new Map();
 
       // Walk the DOM recursively
       function walk(el, depth = 0) {
@@ -1171,6 +1253,11 @@
         const states = getStates(el);
         const props = Object.keys(getProps(el)).length > 0 ? getProps(el) : null;
 
+        // Track seen count for role + name to compute identity triple (role, name, nth)
+        const seenKey = `${role}:${truncatedName}`;
+        const nth = (seenCounts.get(seenKey) || 0) + 1;
+        seenCounts.set(seenKey, nth);
+
         // Determine if element gets a ref
         let ref = null;
         if (isInteractive(el)) {
@@ -1180,6 +1267,10 @@
             g.__dracoA11yRefCounter++;
           }
           ref = g.__dracoA11yRefMap.get(el);
+          // Store identity triple for self-healing
+          if (g.__dracoA11yRefIdentities) {
+            g.__dracoA11yRefIdentities.set(ref, { role, name: truncatedName, nth });
+          }
         }
 
         // Build node

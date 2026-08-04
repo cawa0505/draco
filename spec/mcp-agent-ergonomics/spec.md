@@ -4,7 +4,7 @@ Status: `implemented` (Phase 1 shipped) · Owner: fork (cawa0505) · Input for r
 
 ### Absorbed from agent-browser
 
-identity triple (role, name, nth) for ref self-healing: deferred to follow-up
+identity triple (role, name, nth) for ref self-healing: implemented (planned for Phase 1 Follow-up)
 (see memory #2275). Snapshot serializer already computes role/name; nth-based
 re-match can be layered on top without schema changes.
 
@@ -144,6 +144,46 @@ re-snapshot".
 4. act(ref=unknown) → REF_NOT_FOUND with hint.
 5. Snapshot bounded: caps enforced, truncated flag set when hit.
 6. act(selector=…) still works (escape hatch).
+
+## Phase 1 Follow-up design — Ref Self-healing & Interactive Selection (Option A)
+
+To maximize agent automation success rate, Phase 1 Follow-up adds robust, page-side self-healing of references across React/Vue dynamic updates, and optimizes ref allocation.
+
+### 1. Ref Self-Healing via Identity Triples `(role, name, nth)`
+- **Identity Computation**:
+  - During tree serialization, we track occurrence counts for each `(role, name)` pair via a `seenCounts` map.
+  - The `nth` occurrence of `(role, name)` in traversal order defines the element's identity.
+  - Every allocated ref `eN` records its identity in `g.__dracoA11yRefIdentities.set(ref, { role, name, nth })`.
+- **Self-Healing Lookup**:
+  - `__dracoRefEl(ref)` first resolves via `g.__dracoA11yRefIndex.get(ref)`.
+  - If the resolved element is detached (`!document.documentElement.contains(el)`), or not found:
+    - Look up its identity triple `{ role, name, nth }`.
+    - Traverse the DOM in the same order, computing `(role, name)` for each element.
+    - Find the `nth` matching element `newEl`.
+    - If found, **self-heal** by updating indices:
+      - `g.__dracoA11yRefMap.set(newEl, ref)`
+      - `g.__dracoA11yRefIndex.set(ref, newEl)`
+    - Return `newEl` (or `null` if not found).
+
+### 2. Interactive-Only Ref Assignment
+- Assign refs `eN` **exclusively** to elements that are both visible and interactive:
+  - Interactive roles: `button`, `link`, `textbox`, `checkbox`, `radio`, `combobox`, `option`, `menuitem`, `tab`, etc.
+  - Content roles (e.g. `heading`, `list`, `listitem`, `generic`) never receive refs unless promoted.
+
+### 3. Content-Role Promotion (Clickable Detection)
+- Promote a non-interactive/content element to receive a ref if it is clickable:
+  - Has an explicit interactive role (`role="button"`, etc.).
+  - Has inline event handlers (e.g. `onclick` attribute or property).
+  - Has interactive styling (e.g. `cursor: pointer` computed style).
+  - Has a non-negative `tabindex`.
+
+### Acceptance (Option A)
+1. **Self-healing works**: Detaching an element and replacing it with an identical sibling/new instance retains the same target under the original ref.
+2. **Interactive-only**: No refs on plain headings or lists.
+3. **Promotion works**: Elements with `onclick` or `cursor: pointer` receive refs even with generic roles.
+
+### Blast radius / files (~1)
+- `crates/draco-runtime/js/glue.js` (pure JS, no Rust compiler required).
 
 ### Blast radius / files (~7)
 
