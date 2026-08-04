@@ -100,10 +100,10 @@ draco mcp                        # stdio transport (newline-delimited JSON-RPC)
 
 For in-depth explanations, configuration options, and developers' guides, check out:
 
-* 📄 **[CLI & REST API Guide](docs/USAGE.md)** — Detailed flags, environment options, and REST endpoints (Firecrawl-compatible `/v1/scrape`, `/v1/crawl`, `/v1/map`, `/v1/batch/scrape`).
+* 📄 **[CLI & REST API Guide](docs/usage.md)** — Detailed flags, environment options, and REST endpoints (Firecrawl-compatible `/v1/scrape`, `/v1/crawl`, `/v1/map`, `/v1/batch/scrape`).
 * 📄 **[CSS Selector Extraction Spec](docs/select-format-spec.md)** — Detailed specification and E2E examples of the `--format select` extractor.
 * 📄 **[MCP Agent Ergonomics Spec](spec/mcp-agent-ergonomics/spec.md)** — Design specs and requirements for the Observation-First / Action-by-Ref automation layer.
-* 📄 **[Security Sandbox Model](docs/SANDBOX.md)** — Sandbox containment and V8 JIT isolation security architecture.
+* 📄 **[Security Sandbox Model](docs/sandbox.md)** — Sandbox containment and V8 JIT isolation security architecture.
 * 📄 **[Release & Development Runbook](AGENTS.md)** — Version rules, upstream synchronization process, and release pipelines.
 
 ---

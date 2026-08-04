@@ -200,4 +200,4 @@ On a memory-/disk-constrained box (CI containers, the ~4 GiB build sandbox), run
 bash scripts/gate.sh            # fmt + clippy + test, disk-guarded
 bash scripts/reclaim.sh         # free regenerable build artifacts in a pinch
 ```
-See **[docs/SANDBOX.md](docs/SANDBOX.md)** for the full runbook.
+See **[docs/sandbox.md](docs/sandbox.md)** for the full runbook.

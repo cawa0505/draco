@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # gate.sh — run Draco's CI gates inside the memory-/disk-constrained sandbox
-# WITHOUT the recurring disk-full session loss. See docs/SANDBOX.md.
+# WITHOUT the recurring disk-full session loss. See docs/sandbox.md.
 #
 #   bash scripts/gate.sh                 # fmt + clippy + test (the full gate)
 #   bash scripts/gate.sh fmt             # a subset: any of fmt|clippy|test

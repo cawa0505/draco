@@ -27,7 +27,7 @@ draco-core = { path = "crates/draco-core" }
 opt-level = 3
 lto = "thin"
 
-# --- Disk-footprint controls (see docs/SANDBOX.md) ---
+# --- Disk-footprint controls (see docs/sandbox.md) ---
 # The dev/test/clippy artifact tree is dominated by debuginfo. Full DWARF for a
 # workspace that links V8/deno_core/oxc/BoringSSL across many `--all-targets`
 # test binaries runs to several GiB of `target/` — the recurring cause of

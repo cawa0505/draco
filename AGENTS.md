@@ -1,7 +1,7 @@
 # Draco (fork) — project rules
 
 Fork of [0xchasercat/draco](https://github.com/0xchasercat/draco) at
-[cawa0505/draco](https://github.com/cawa0505/draco). Read `docs/ROADMAP.md` and
+[cawa0505/draco](https://github.com/cawa0505/draco). Read `docs/roadmap.md` and
 `docs/select-format-spec.md` before touching pipeline code.
 
 ## Fork main goal (2026-08)
