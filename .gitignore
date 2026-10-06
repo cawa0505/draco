@@ -4,6 +4,7 @@
 .DS_Store
 /.cortexkit
 # Code Relay (local state)
+.relay/
 relay.json
 RESUME.md
 next_step.md

@@ -19,3 +19,4 @@
 ## 下一個 OpenSpec 標的
 
 - `plugin-system/spec.md` — v0.25.0 microkernel plugin pipeline，approved proposal
+- `terminal-qr-stream/spec.md` — v0.27.0 Terminal ANSI QR Stream & Headless Auth Relay，draft

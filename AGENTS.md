@@ -1,48 +1,29 @@
-# Draco (fork) — project rules
+# Draco — project rules
 
-Fork of [0xchasercat/draco](https://github.com/0xchasercat/draco) at
-[cawa0505/draco](https://github.com/cawa0505/draco). Read `docs/roadmap.md` and
-`docs/select-format-spec.md` before touching pipeline code.
+Autonomous project maintained under [saaslab/draco](https://gitlab.com/saaslab/draco) (mirrored to [cawa0505/draco](https://github.com/cawa0505/draco)). Formerly forked from `0xchasercat/draco` (upstream deleted/archived 2026-08). Read `docs/roadmap.md` and `docs/select-format-spec.md` before touching pipeline code.
 
-## Fork main goal (2026-08)
+## Main goal
 
 Strengthen the MCP layer for AI-agent use — see `spec/mcp-agent-ergonomics/spec.md`
 (R1 observation-first action-by-ref, R2 explicit sessions, R3 bounded calls,
 R4 quality signals, R5 self-describing failures, R6 batch, R7 descriptions-as-spec).
 Interact work rides roadmap Phase 1.
 
-## Versioning (fork rule)
+## Versioning & Repositories
 
-- Fork release version = **upstream latest minor + 1**. Upstream is at v0.20.x →
-  our next release is v0.21.0. Never reuse an upstream tag name — our v0.19.0
-  already collided with upstream's own v0.19.0 (different commits, same name).
+- Canonical repository: `git@gitlab.com:saaslab/draco.git` (remote: `glab`)
+- Backup/Mirror repository: `https://github.com/cawa0505/draco` (remote: `origin`)
+- Versioning: Standard SemVer independently versioned. Next minor milestone is v0.25.0 (`plugin-system`), followed by v0.27.0 (`terminal-qr-stream`).
 - Bump `version` in root `Cargo.toml` (`workspace.package`); all crates inherit.
-- Tag and release on `cawa0505/draco` only. Release CI runs on GitHub-hosted
-  runners (fork-friendly) — do not restore the upstream self-hosted
-  `namespace-profile-draco-*` runners; they do not exist on this fork.
-- Release cadence: cut releases on our own milestones (feature complete /
-  install demand), not synced to every upstream release — install.sh consumers
-  pull our `releases/latest`. Before cutting, `git ls-remote --tags upstream`
-  and set version = max(our next, upstream latest minor + 1).
+- Tag and release on `saaslab/draco`. Release CI runs on dedicated runners.
 
-## Upstream sync workflow
+## Specifications & Divergences
 
-`upstream` remote is already configured. Per release:
-
-1. `git fetch upstream` → measure delta: `git rev-list --count HEAD..upstream/main`
-2. Review each upstream commit: **absorb** (wanted, e.g. fleet diagnostics) /
-   **divert** (conflicts with our divergences) / **defer**
-3. Merge or cherry-pick → run gates below → tag with the fork version rule
-
-Deliberate divergences from upstream (keep when merging):
+Specs follow the OpenSpec convention (`spec/` dir, see `spec/README.md`):
 - `select` output format + `--selector` / `selectors` (docs/select-format-spec.md)
-- Phase 4 (screenshot/a11y) waits for rustwright-core ≥0.2.0 — upstream declares
-  screenshots a non-goal; our fork intentionally diverges
-- Deploy: systemd user service example, `install.sh --from-source`, canonical
-  owner URLs (`cawa0505`)
-- Upstream process artifacts (`docs/superpowers/**` superpowers-generated plans):
-  divert — Claude Code process noise, not code we adopt
-- Specs follow the OpenSpec convention (`spec/` dir, see spec/README.md)
+- Phase 4 (screenshot/a11y) waits for rustwright-core ≥0.2.0
+- Deploy: systemd user service example, `install.sh --from-source`
+- Active/Planned Specs in `spec/`: `mcp-agent-ergonomics`, `stealth-proxy`, `plugin-system`, `terminal-qr-stream`
 
 ## Gates before ship
 
